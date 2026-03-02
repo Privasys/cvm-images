@@ -20,7 +20,7 @@ jobs:
 
       - name: Install mkosi
         run: |
-          sudo pip3 install git+https://github.com/systemd/mkosi.git --break-system-packages
+          sudo pip3 install mkosi==26 --break-system-packages
 
       - name: Install build dependencies
         run: |

@@ -47,8 +47,8 @@ A Linux build machine running Ubuntu 24.04 (a GCP VM, WSL2, or any Linux box).
 ```bash
 sudo apt update && sudo apt upgrade -y
 
-# mkosi v27+ from GitHub main (Ubuntu's packaged version is too old)
-sudo pip3 install git+https://github.com/systemd/mkosi.git --break-system-packages
+# mkosi v26 (Ubuntu's packaged version is too old)
+sudo pip3 install mkosi==26 --break-system-packages
 
 # Build tools
 sudo apt install -y \
