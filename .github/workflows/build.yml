@@ -26,6 +26,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            systemd-container bubblewrap \
             systemd-ukify systemd-boot-efi systemd-repart \
             mtools dosfstools e2fsprogs squashfs-tools \
             veritysetup cryptsetup erofs-utils \
@@ -48,10 +49,10 @@ jobs:
           done
 
           cd ../../../..
-          if [ -f etc/resolv.conf ] && [ ! -L etc/resolv.conf ]; then
-            target=$(cat etc/resolv.conf)
-            rm etc/resolv.conf
-            ln -s "$target" etc/resolv.conf
+          if [ -f mkosi.extra/etc/resolv.conf ] && [ ! -L mkosi.extra/etc/resolv.conf ]; then
+            target=$(cat mkosi.extra/etc/resolv.conf)
+            rm mkosi.extra/etc/resolv.conf
+            ln -s "$target" mkosi.extra/etc/resolv.conf
           fi
 
       - name: Build image
