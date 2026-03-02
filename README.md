@@ -1,6 +1,8 @@
 # tdx-image-base
 
-A minimal, read-only, fully measured VM image for [Intel TDX](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html) on Google Cloud. Built with [mkosi](https://github.com/systemd/mkosi).
+A minimal, read-only, fully measured VM image for [Intel TDX](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html) confidential computing. Built with [mkosi](https://github.com/systemd/mkosi).
+
+The image is cloud-agnostic at its core — a standard GPT disk with a UKI, erofs root, and dm-verity hash tree. It can run on any TDX-capable hypervisor (GCP, Azure, bare-metal QEMU/KVM). This repository includes a deployment guide for **Google Cloud Platform**; guides for other platforms will follow.
 
 This is the base OS image. Application-specific layers (services, binaries) are built on top of it in separate repositories.
 
@@ -30,11 +32,11 @@ Every byte of code that executes on the machine is either measured by TDX hardwa
 | Networking | systemd-networkd with DHCP |
 | SSH | openssh-server (password auth disabled) |
 | Attestation support | tpm2-tools, clevis, cryptsetup |
-| GCP integration | google-compute-engine, google-guest-agent |
+| Cloud integration | google-compute-engine, google-guest-agent (GCP; removable for other platforms) |
 
 ## Pre-built images
 
-Download the latest `.tar.gz` from [Releases](https://github.com/Privasys/tdx-image-base/releases). Each release contains a GCP-ready raw disk image (`disk.raw` inside the archive).
+Download the latest `.tar.gz` from [Releases](https://github.com/Privasys/tdx-image-base/releases). Each release contains a raw disk image (`disk.raw` inside the archive) that can be imported into any TDX-capable platform.
 
 ## Building from source
 
@@ -112,7 +114,7 @@ tpm2_pcrread sha256:0,1,2,3,4,5,7,11
 
 Exit QEMU: `Ctrl-A X`
 
-## Deploying to GCP
+## Deploying to Google Cloud Platform
 
 ### Package and upload
 
@@ -177,7 +179,7 @@ mkosi.extra/                # Files overlaid onto the image
     resolv.conf             # → /run/systemd/resolve/stub-resolv.conf
     systemd/
       network/
-        10-gcp.network      # DHCP configuration
+        10-gcp.network      # DHCP configuration (works on any platform)
       system/
         multi-user.target.wants/
           systemd-networkd.service
@@ -186,7 +188,7 @@ mkosi.extra/                # Files overlaid onto the image
         sysinit.target.wants/
           systemd-networkd-wait-online.service
     ssh/sshd_config.d/
-      50-gcp.conf           # Hardened SSH config
+      50-hardened.conf      # Hardened SSH config
     tmpfiles.d/
       readwrite.conf        # Writable directories on read-only rootfs
 ```
@@ -198,7 +200,7 @@ The rootfs is read-only — `apt install` on a running VM is impossible. To upda
 1. Edit configs in this repo (add/update packages, bump `ImageVersion`)
 2. `sudo mkosi build`
 3. Test locally with QEMU
-4. Upload new image, create new GCP image in the `privasys-tdx` family
+4. Upload and register the new image on your cloud platform
 5. Create new VM, attach existing data disk, delete old VM
 
 The data partition (LUKS-encrypted, separate persistent disk) survives image updates.
@@ -217,7 +219,7 @@ All added binaries remain **fully measured by dm-verity** — the trust chain is
 ## Design notes
 
 - **Why erofs?** Read-only by design, smaller than ext4, ideal for dm-verity. No accidental writes possible.
-- **Why unsigned UKI?** GCP TDX VMs use TDVF (not Secure Boot) for measurement. The UKI is measured into RTMR[1] regardless of signature. Signing adds complexity without security benefit in this context.
+- **Why unsigned UKI?** TDX measures the UKI into RTMR[1] regardless of Secure Boot signature status. On platforms using TDVF (e.g. GCP), signing adds complexity without security benefit. For platforms that enforce Secure Boot, set `UnifiedKernelImages=signed` and provide signing keys.
 - **Why mkosi.extra symlinks instead of mkosi.postinst?** With erofs, the filesystem is already read-only when postinst runs. `systemctl enable` writes symlinks to `/etc`, which fails on a read-only filesystem.
 - **Why `Repositories=universe`?** Required for packages like `clevis` that aren't in Ubuntu's `main` repository.
 - **Why `CopyFiles=/:/` in the root partition config?** erofs requires explicit file population — without this directive, the root partition is empty.
