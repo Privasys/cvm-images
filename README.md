@@ -24,7 +24,7 @@ Every byte of code that executes on the machine is either measured by TDX hardwa
 | Component | Details |
 |-----------|---------|
 | Guest OS | Ubuntu 24.04 LTS (Noble Numbat) |
-| Kernel | `linux-image-gcp` (6.17+, auto-tracks latest; has TDX + SEV guest support, gVNIC, NVMe) |
+| Kernel | `linux-image-gcp` (6.17+, auto-tracks latest; first Noble kernel with TDX guest support) |
 | Root filesystem | erofs (read-only) |
 | Integrity | dm-verity hash tree |
 | Boot | GRUB with kernel + initrd + dm-verity roothash in cmdline |
