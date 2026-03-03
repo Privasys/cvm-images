@@ -12,12 +12,58 @@ This is the base OS image. Application-specific layers (services, binaries) are 
 Silicon (TDX hardware)
   └─ MRTD — measures the TD firmware (OVMF/TDVF) loaded by the hypervisor
       └─ RTMR[0] — measures the firmware configuration
-          └─ RTMR[1] — measures the bootloader, kernel, initrd, and cmdline (with dm-verity root hash)
-              └─ dm-verity — every block of the rootfs verified against the hash tree
-                  └─ All userland binaries — any modification = I/O error + kernel panic
+          └─ Secure Boot — UEFI verifies shimx64.efi (Microsoft) → grubx64.efi (Canonical) → kernel
+              └─ RTMR[1] — measures the bootloader, kernel, initrd, and cmdline (with dm-verity root hash)
+                  └─ dm-verity — every block of the rootfs verified against the hash tree
+                      └─ All userland binaries — any modification = I/O error + kernel panic
 ```
 
 Every byte of code that executes on the machine is either measured by TDX hardware or verified by dm-verity. No gaps.
+
+## Why not use Google's Confidential VM image?
+
+Google provides ready-made Confidential VM images such as **"Confidential image (Ubuntu 24.04 LTS NVIDIA version: 580)"**. They boot on TDX, they come pre-installed with NVIDIA drivers, and they require zero mkosi knowledge. So why build our own?
+
+The answer is the trust chain above. A confidential VM is only as trustworthy as the code running inside it. Google's images are **general-purpose** — they are designed to run any workload — and that generality is fundamentally at odds with verifiability.
+
+| | Google Confidential VM image | tdx-image-base |
+|---|---|---|
+| **Root filesystem** | ext4 (read-write) | erofs (read-only) |
+| **dm-verity** | Not enabled | Enabled — every block verified |
+| **Installed packages** | ~2000+ (full Ubuntu Desktop/Server stack, NVIDIA drivers, CUDA, cloud agents, snap, apt) | ~40 (minimal: kernel, systemd, openssh, attestation tools) |
+| **Image size** | ~30 GB | ~1.5 GB |
+| **Can modify rootfs at runtime** | Yes (`apt install`, write anywhere) | No (I/O error → kernel panic) |
+| **Kernel modules** | All Ubuntu modules, unsigned third-party NVIDIA `.ko` | Ubuntu-signed modules only (`module.sig_enforce=1`) |
+| **Kernel lockdown** | Not enforced | `lockdown=integrity` — no unsigned code in ring 0 |
+| **Attack surface** | Large: writable FS, NVIDIA blob drivers, snap daemon, update services, package managers | Minimal: read-only FS, no package manager at runtime, no writable paths except tmpfs and data partition |
+| **Reproducibility** | Opaque — Google builds the image, you trust their pipeline | Source-available — `mkosi build` produces the image from this repo |
+| **What TDX actually attests** | "Some Ubuntu 24.04 image that Google built, with an unknown set of packages and configs" | "This exact erofs image, with this exact dm-verity root hash, bit-for-bit" |
+
+### The core problem
+
+TDX measures the initial memory contents of the VM (MRTD) and the boot chain (RTMRs). But measurements are only useful if you know **what was measured**. With a general-purpose image:
+
+1. The rootfs is writable — software can be installed, patched, or replaced after boot. The TDX measurement covers the initial state, but the running state can drift arbitrarily.
+2. There is no dm-verity — nothing prevents a compromised process from modifying binaries on disk. A rootkit that replaces `/usr/bin/sshd` would survive reboot.
+3. The package set is enormous — thousands of packages means thousands of potential CVEs. Even if today's image is secure, the attack surface is orders of magnitude larger.
+4. Unsigned kernel modules (e.g. NVIDIA blobs) can be loaded — any code running in ring 0 has full access to the guest's memory, which TDX is supposed to protect.
+
+With tdx-image-base, the dm-verity root hash is baked into the kernel command line and measured by TDX. A remote verifier can check the RTMR values against the expected hash and know, cryptographically, that the VM is running **exactly** the code in this repository — not a modified version, not a version with extra packages, not a version where someone ran `apt install backdoor`.
+
+### When to use Google's image
+
+Google's Confidential VM images are fine when:
+- You need NVIDIA GPU passthrough (CUDA, ML inference)
+- You trust Google's image pipeline and don't need remote attestation of the OS
+- Your threat model only requires memory encryption (TDX protects RAM from the host), not full-stack verifiability
+
+### When to use this image
+
+Use tdx-image-base when:
+- You need **end-to-end verifiability** from silicon to application
+- A remote party must cryptographically verify what code is running
+- You want the smallest possible attack surface
+- You treat the cloud provider as an adversary (the whole point of confidential computing)
 
 ## What's in the image
 
@@ -27,7 +73,8 @@ Every byte of code that executes on the machine is either measured by TDX hardwa
 | Kernel | `linux-image-gcp` (6.17+, auto-tracks latest; first Noble kernel with TDX guest support) |
 | Root filesystem | erofs (read-only) |
 | Integrity | dm-verity hash tree |
-| Boot | GRUB with kernel + initrd + dm-verity roothash in cmdline |
+| Boot | Signed shim (Microsoft) → signed GRUB (Canonical) → kernel + initrd + dm-verity roothash in cmdline |
+| Secure Boot | Enabled — full chain from UEFI firmware through bootloader to kernel |
 | Partitions | ESP (512 MB) + root erofs (~940 MB) + verity hash (~63 MB) |
 | Networking | systemd-networkd with DHCP |
 | SSH | openssh-server (password auth disabled) |
