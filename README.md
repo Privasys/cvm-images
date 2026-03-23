@@ -13,9 +13,10 @@ Silicon (TDX hardware)
   └─ MRTD — measures the TD firmware (OVMF/TDVF) loaded by the hypervisor
       └─ RTMR[0] — measures the firmware configuration
           └─ Secure Boot — UEFI verifies shimx64.efi (Microsoft) → grubx64.efi (Canonical) → kernel
-              └─ RTMR[1] — measures the bootloader, kernel, initrd, and cmdline (with dm-verity root hash)
-                  └─ dm-verity — every block of the rootfs verified against the hash tree
-                      └─ All userland binaries — any modification = I/O error + kernel panic
+              └─ RTMR[1] — measures the EFI boot path: shim and GRUB binaries (CC MR 2)
+                  └─ RTMR[2] — measures OS boot: kernel, initrd, cmdline with dm-verity root hash (CC MR 3)
+                      └─ dm-verity — every block of the rootfs verified against the hash tree
+                          └─ All userland binaries — any modification = I/O error + kernel panic
 ```
 
 Every byte of code that executes on the machine is either measured by TDX hardware or verified by dm-verity. No gaps.
