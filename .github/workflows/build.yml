@@ -20,17 +20,17 @@ jobs:
 
       - name: Install mkosi
         run: |
-          sudo pip3 install mkosi==26 --break-system-packages
+          sudo pip3 install git+https://github.com/systemd/mkosi.git@v26 --break-system-packages
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             systemd-container bubblewrap \
-            systemd-ukify systemd-boot-efi systemd-repart \
+            systemd-ukify systemd-boot-efi \
             mtools dosfstools e2fsprogs squashfs-tools \
-            veritysetup cryptsetup erofs-utils \
-            pesign sbsigntools debootstrap systemd-boot
+            cryptsetup erofs-utils \
+            pesign sbsigntool debootstrap systemd-boot
 
       - name: Recreate symlinks
         run: |
