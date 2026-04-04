@@ -55,7 +55,8 @@ apt-get install -y --no-install-recommends \
     build-essential fakeroot dpkg-dev \
     libncurses-dev flex bison libssl-dev libelf-dev \
     bc dwarves debhelper rsync cpio kmod \
-    python3 python3-dev 2>/dev/null || true
+    python3 python3-dev \
+    llvm clang lld 2>/dev/null || true
 
 # ── Step 1: Identify the HWE kernel version ──
 echo ""
