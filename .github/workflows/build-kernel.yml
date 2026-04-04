@@ -1,0 +1,54 @@
+name: Build Patched Kernel
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'build-kernel.sh'
+      - 'patches/**'
+    tags: ['kernel-v*']
+  pull_request:
+    branches: [main]
+    paths:
+      - 'build-kernel.sh'
+      - 'patches/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build CVM guard kernel
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Free disk space
+        run: |
+          # The kernel build needs ~20 GB. Free up runner space.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+
+      - name: Build patched kernel
+        run: |
+          sudo ./build-kernel.sh "${{ github.workspace }}/debs"
+          echo "### Kernel .deb packages" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -lh debs/*.deb >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload kernel .debs
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-debs
+          path: debs/*.deb
+          retention-days: 90
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/kernel-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: debs/*.deb
+          generate_release_notes: true
