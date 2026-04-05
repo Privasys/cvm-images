@@ -1,6 +1,8 @@
-# cvm-images
+# Privasys Confidential VM Images
 
 Minimal, read-only, fully measured VM images for confidential computing. Supports [Intel TDX](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html) and [AMD SEV-SNP](https://www.amd.com/en/developer/sev.html). Built with [mkosi](https://github.com/systemd/mkosi).
+
+These images are the base OS layer used by [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/). They are published here for transparency and reproducibility. To deploy confidential workloads, use [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/) which builds on these images and provides [RA-TLS](https://docs.privasys.org/technology/attestation/attested-connections/), container orchestration, and attestation out of the box.
 
 ## Images
 
@@ -14,7 +16,7 @@ All images share the same security architecture: erofs root, dm-verity, Secure B
 
 The images are cloud-agnostic at their core, a standard GPT disk with a GRUB-booted kernel, erofs root, and dm-verity hash tree. They can run on any capable hypervisor (GCP, Azure, bare-metal QEMU/KVM). See [Deployment guides](#deployment-guides) for platform-specific instructions.
 
-This is the base OS image. Application-specific layers (services, binaries) are built on top of it in separate repositories.
+This is the base OS image used by [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/). Application-specific layers (containers, services) are deployed through the platform, not built directly on top of these images.
 
 ## Trust chain
 
@@ -31,50 +33,15 @@ Silicon (TDX hardware)
 
 Every byte of code that executes on the machine is either measured by TDX hardware or verified by dm-verity. No gaps.
 
-## Why not use Google's Confidential VM image?
+## Security documentation
 
-Google provides ready-made Confidential VM images such as **"Confidential image (Ubuntu 24.04 LTS NVIDIA version: 580)"**. They boot on TDX, they come pre-installed with NVIDIA drivers, and they require zero mkosi knowledge. So why build our own?
-
-The answer is the trust chain above. A confidential VM is only as trustworthy as the code running inside it. Google's images are **general-purpose** — they are designed to run any workload — and that generality is fundamentally at odds with verifiability.
-
-| | Google Confidential VM image | cvm-images |
-|---|---|---|
-| **Root filesystem** | ext4 (read-write) | erofs (read-only) |
-| **dm-verity** | Not enabled | Enabled — every block verified |
-| **Installed packages** | ~2000+ (full Ubuntu Desktop/Server stack, NVIDIA drivers, CUDA, cloud agents, snap, apt) | ~40 (minimal: kernel, systemd, openssh, attestation tools) |
-| **Image size** | ~30 GB | ~1.5 GB |
-| **Can modify rootfs at runtime** | Yes (`apt install`, write anywhere) | No (I/O error → kernel panic) |
-| **Kernel modules** | All Ubuntu modules, unsigned third-party NVIDIA `.ko` | Ubuntu-signed modules only (`module.sig_enforce=1`) |
-| **Kernel lockdown** | Not enforced | `lockdown=integrity` — no unsigned code in ring 0 |
-| **Attack surface** | Large: writable FS, NVIDIA blob drivers, snap daemon, update services, package managers | Minimal: read-only FS, no package manager at runtime, no writable paths except tmpfs and data partition |
-| **Reproducibility** | Opaque — Google builds the image, you trust their pipeline | Source-available — `mkosi build` produces the image from this repo |
-| **What TDX actually attests** | "Some Ubuntu 24.04 image that Google built, with an unknown set of packages and configs" | "This exact erofs image, with this exact dm-verity root hash, bit-for-bit" |
-
-### The core problem
-
-TDX measures the initial memory contents of the VM (MRTD) and the boot chain (RTMRs). But measurements are only useful if you know **what was measured**. With a general-purpose image:
-
-1. The rootfs is writable — software can be installed, patched, or replaced after boot. The TDX measurement covers the initial state, but the running state can drift arbitrarily.
-2. There is no dm-verity — nothing prevents a compromised process from modifying binaries on disk. A rootkit that replaces `/usr/bin/sshd` would survive reboot.
-3. The package set is enormous — thousands of packages means thousands of potential CVEs. Even if today's image is secure, the attack surface is orders of magnitude larger.
-4. Unsigned kernel modules (e.g. NVIDIA blobs) can be loaded — any code running in ring 0 has full access to the guest's memory, which TDX is supposed to protect.
-
-With cvm-images, the dm-verity root hash is baked into the kernel command line and measured by the TEE hardware. A remote verifier can check the measurement registers against the expected hash and know, cryptographically, that the VM is running **exactly** the code in this repository, not a modified version, not a version with extra packages, not a version where someone ran `apt install backdoor`.
-
-### When to use Google's image
-
-Google's Confidential VM images are fine when:
-- You need NVIDIA GPU passthrough (CUDA, ML inference)
-- You trust Google's image pipeline and don't need remote attestation of the OS
-- Your threat model only requires memory encryption (TDX protects RAM from the host), not full-stack verifiability
-
-### When to use this image
-
-Use cvm-images when:
-- You need **end-to-end verifiability** from silicon to application
-- A remote party must cryptographically verify what code is running
-- You want the smallest possible attack surface
-- You treat the cloud provider as an adversary (the whole point of confidential computing)
+| Document | Description |
+|----------|-------------|
+| [Security overview](docs/security.md) | Threat model, attack surfaces, and guarantees |
+| [Hardening guide](docs/hardening.md) | Security architecture and design decisions |
+| [Encrypted storage](docs/encrypted-storage.md) | LUKS-encrypted persistent volumes with TEE-bound keys |
+| [Image integrity](docs/image-integrity.md) | Supply chain security, dm-verity, reproducible builds |
+| [GCP comparison](docs/gcp-comparison.md) | Why we build our own images instead of using Google's |
 
 ## What's in the image
 
@@ -200,7 +167,7 @@ This image is the **guest OS** layer. It sits on top of the host stack and below
 └──────────────────────────┬──────────────────────────────────┘
                            │ launches
 ┌──────────────────────────▼──────────────────────────────────┐
-│  cvm-images (this repo)                     Guest OS image  │
+│  Privasys CVM Images (this repo)            Guest OS image  │
 │  GRUB boot, erofs root, dm-verity, attestation tools        │
 │  The workload runs here                                     │
 └──────────────────────────┬──────────────────────────────────┘
@@ -212,7 +179,7 @@ This image is the **guest OS** layer. It sits on top of the host stack and below
 └─────────────────────────────────────────────────────────────┘
 ```
 
-| | [intel/tdx-module](https://github.com/intel/tdx-module) | [canonical/tdx](https://github.com/canonical/tdx) | cvm-images |
+| | [intel/tdx-module](https://github.com/intel/tdx-module) | [canonical/tdx](https://github.com/canonical/tdx) | Privasys CVM Images |
 |---|---|---|---|
 | **What** | CPU firmware (SEAM module) | Host-side Linux + QEMU patches | Guest VM disk image |
 | **Runs where** | Inside the CPU | On the bare-metal host OS | Inside the Trust Domain |
@@ -237,7 +204,7 @@ images/
     mkosi.conf.d/boot.conf    # GPU CC mode (iommu=nopt, NVreg_ConfidentialComputing)
     mkosi.extra/              # NVIDIA service enables
     mkosi.prepare             # Adds NVIDIA apt repos
-    mkosi.repart/             # Includes 100G data partition for models
+    mkosi.repart/             # Includes 500G data partition for models
 common/
   mkosi.extra/                # Shared overlay files
     etc/
@@ -250,8 +217,13 @@ common/
 build-kernel.sh               # Patched CVM guard kernel build script
 patches/                      # Kernel patches (BadAML CVM guard)
 docs/
-  deploy-gcp.md
-  deploy-ovhcloud.md
+  security.md                 # Security overview and threat model
+  hardening.md                # Operational hardening guide
+  encrypted-storage.md        # LUKS-encrypted persistent volumes
+  image-integrity.md          # Supply chain security and reproducible builds
+  gcp-comparison.md           # Comparison with Google's Confidential VM images
+  deploy-gcp.md               # Google Cloud Platform deployment guide
+  deploy-ovhcloud.md          # OVHcloud bare-metal deployment guide
 ```
 
 ## How updates work
@@ -266,16 +238,11 @@ The rootfs is read-only — `apt install` on a running VM is impossible. To upda
 
 The data partition (LUKS-encrypted, separate persistent disk) survives image updates.
 
-## Building application layers
+## Deploying workloads
 
-To add services (e.g. a reverse proxy, database) on top of this base image:
+These images provide the hardened base OS. To deploy applications (containers, services, AI models), use [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/) which handles container orchestration, [RA-TLS](https://docs.privasys.org/technology/attestation/attested-connections/) certificate management, and attestation automatically.
 
-1. Add packages to `Packages=` in the image's `mkosi.conf`, or drop static binaries into `common/mkosi.extra/usr/local/bin/` (shared) or `images/<name>/mkosi.extra/` (image-specific)
-2. Add systemd unit files in the appropriate `mkosi.extra/etc/systemd/system/`
-3. Point data directories to `/data/` (the LUKS-encrypted persistent disk mount)
-4. Rebuild and redeploy
-
-All added binaries remain **fully measured by dm-verity** — the trust chain is preserved.
+All application code deployed through Enclave OS Virtual is measured into the RA-TLS certificate's X.509 extensions, extending the trust chain from the base OS all the way to the application layer.
 
 ## Design notes
 
