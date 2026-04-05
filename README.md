@@ -1,8 +1,18 @@
-# tdx-image-base
+# cvm-images
 
-A minimal, read-only, fully measured VM image for [Intel TDX](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html) confidential computing. Built with [mkosi](https://github.com/systemd/mkosi).
+Minimal, read-only, fully measured VM images for confidential computing. Supports [Intel TDX](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html) and [AMD SEV-SNP](https://www.amd.com/en/developer/sev.html). Built with [mkosi](https://github.com/systemd/mkosi).
 
-The image is cloud-agnostic at its core — a standard GPT disk with a GRUB-booted kernel, erofs root, and dm-verity hash tree. It can run on any TDX-capable hypervisor (GCP, Azure, bare-metal QEMU/KVM). See [Deployment guides](#deployment-guides) for platform-specific instructions.
+## Images
+
+| Image | Directory | TEE | Description |
+|-------|-----------|-----|-------------|
+| **tdx-base** | `images/tdx-base/` | Intel TDX | Base image for TDX confidential VMs |
+| **sev-snp-base** | `images/sev-snp-base/` | AMD SEV-SNP | Base image for SEV-SNP confidential VMs |
+| **sev-snp-gpu** | `images/sev-snp-gpu/` | AMD SEV-SNP + NVIDIA H100 | Confidential AI inference with GPU CC mode |
+
+All images share the same security architecture: erofs root, dm-verity, Secure Boot, kernel lockdown. Shared overlay files (network, SSH, tmpfiles) live in `common/mkosi.extra/`.
+
+The images are cloud-agnostic at their core, a standard GPT disk with a GRUB-booted kernel, erofs root, and dm-verity hash tree. They can run on any capable hypervisor (GCP, Azure, bare-metal QEMU/KVM). See [Deployment guides](#deployment-guides) for platform-specific instructions.
 
 This is the base OS image. Application-specific layers (services, binaries) are built on top of it in separate repositories.
 
@@ -27,7 +37,7 @@ Google provides ready-made Confidential VM images such as **"Confidential image 
 
 The answer is the trust chain above. A confidential VM is only as trustworthy as the code running inside it. Google's images are **general-purpose** — they are designed to run any workload — and that generality is fundamentally at odds with verifiability.
 
-| | Google Confidential VM image | tdx-image-base |
+| | Google Confidential VM image | cvm-images |
 |---|---|---|
 | **Root filesystem** | ext4 (read-write) | erofs (read-only) |
 | **dm-verity** | Not enabled | Enabled — every block verified |
@@ -49,7 +59,7 @@ TDX measures the initial memory contents of the VM (MRTD) and the boot chain (RT
 3. The package set is enormous — thousands of packages means thousands of potential CVEs. Even if today's image is secure, the attack surface is orders of magnitude larger.
 4. Unsigned kernel modules (e.g. NVIDIA blobs) can be loaded — any code running in ring 0 has full access to the guest's memory, which TDX is supposed to protect.
 
-With tdx-image-base, the dm-verity root hash is baked into the kernel command line and measured by TDX. A remote verifier can check the RTMR values against the expected hash and know, cryptographically, that the VM is running **exactly** the code in this repository — not a modified version, not a version with extra packages, not a version where someone ran `apt install backdoor`.
+With cvm-images, the dm-verity root hash is baked into the kernel command line and measured by the TEE hardware. A remote verifier can check the measurement registers against the expected hash and know, cryptographically, that the VM is running **exactly** the code in this repository, not a modified version, not a version with extra packages, not a version where someone ran `apt install backdoor`.
 
 ### When to use Google's image
 
@@ -60,7 +70,7 @@ Google's Confidential VM images are fine when:
 
 ### When to use this image
 
-Use tdx-image-base when:
+Use cvm-images when:
 - You need **end-to-end verifiability** from silicon to application
 - A remote party must cryptographically verify what code is running
 - You want the smallest possible attack surface
@@ -84,7 +94,7 @@ Use tdx-image-base when:
 
 ## Pre-built images
 
-Download the latest `.tar.gz` from [Releases](https://github.com/Privasys/tdx-image-base/releases). Each release contains a raw disk image (`disk.raw` inside the archive) that can be imported into any TDX-capable platform.
+Download the latest `.tar.gz` from [Releases](https://github.com/Privasys/cvm-images/releases). Releases are tagged per image: `tdx-base-v*`, `sev-snp-base-v*`, `sev-snp-gpu-v*`. Each release contains a raw disk image (`disk.raw` inside the archive) that can be imported into any capable platform.
 
 ## Building from source
 
@@ -109,9 +119,13 @@ sudo apt install -y \
 ### Build
 
 ```bash
-git clone https://github.com/Privasys/tdx-image-base.git
-cd tdx-image-base
-sudo mkosi build
+git clone https://github.com/Privasys/cvm-images.git
+cd cvm-images
+
+# Build a specific image:
+cd images/tdx-base && sudo mkosi build
+# or: cd images/sev-snp-base && sudo mkosi build
+# or: cd images/sev-snp-gpu && sudo mkosi build
 ```
 
 Output: `privasys-tdx-base_0.1.0.raw` (~1.5 GB)
@@ -186,7 +200,7 @@ This image is the **guest OS** layer. It sits on top of the host stack and below
 └──────────────────────────┬──────────────────────────────────┘
                            │ launches
 ┌──────────────────────────▼──────────────────────────────────┐
-│  tdx-image-base (this repo)                 Guest OS image  │
+│  cvm-images (this repo)                     Guest OS image  │
 │  GRUB boot, erofs root, dm-verity, attestation tools        │
 │  The workload runs here                                     │
 └──────────────────────────┬──────────────────────────────────┘
@@ -198,7 +212,7 @@ This image is the **guest OS** layer. It sits on top of the host stack and below
 └─────────────────────────────────────────────────────────────┘
 ```
 
-| | [intel/tdx-module](https://github.com/intel/tdx-module) | [canonical/tdx](https://github.com/canonical/tdx) | tdx-image-base |
+| | [intel/tdx-module](https://github.com/intel/tdx-module) | [canonical/tdx](https://github.com/canonical/tdx) | cvm-images |
 |---|---|---|---|
 | **What** | CPU firmware (SEAM module) | Host-side Linux + QEMU patches | Guest VM disk image |
 | **Runs where** | Inside the CPU | On the bare-metal host OS | Inside the Trust Domain |
@@ -209,33 +223,35 @@ This image is the **guest OS** layer. It sits on top of the host stack and below
 ## Repository structure
 
 ```
-mkosi.conf                  # Main build configuration
-mkosi.conf.d/
-  boot.conf                 # Bootloader and kernel command line settings
-mkosi.repart/
-  00-esp.conf               # EFI System Partition
-  10-root.conf              # Root filesystem (erofs + dm-verity)
-  11-root-verity.conf       # Verity hash partition
-mkosi.extra/                # Files overlaid onto the image
-  etc/
-    resolv.conf             # → /run/systemd/resolve/stub-resolv.conf
-    systemd/
-      network/
-        10-gcp.network      # DHCP configuration (works on any platform)
-      system/
-        multi-user.target.wants/
-          systemd-networkd.service
-        sockets.target.wants/
-          systemd-networkd.socket
-        sysinit.target.wants/
-          systemd-networkd-wait-online.service
-    ssh/sshd_config.d/
-      50-hardened.conf      # Hardened SSH config
-    tmpfiles.d/
-      readwrite.conf        # Writable directories on read-only rootfs
+images/
+  tdx-base/                   # Intel TDX base image
+    mkosi.conf                # Image-specific configuration
+    mkosi.conf.d/boot.conf    # TDX kernel command line
+    mkosi.repart/             # Partition layout
+  sev-snp-base/               # AMD SEV-SNP base image
+    mkosi.conf
+    mkosi.conf.d/boot.conf    # SEV kernel command line (mem_encrypt=on)
+    mkosi.repart/
+  sev-snp-gpu/                # AMD SEV-SNP + NVIDIA H100
+    mkosi.conf                # Adds NVIDIA driver, CUDA, container toolkit
+    mkosi.conf.d/boot.conf    # GPU CC mode (iommu=nopt, NVreg_ConfidentialComputing)
+    mkosi.extra/              # NVIDIA service enables
+    mkosi.prepare             # Adds NVIDIA apt repos
+    mkosi.repart/             # Includes 100G data partition for models
+common/
+  mkosi.extra/                # Shared overlay files
+    etc/
+      resolv.conf
+      systemd/
+        network/10-gcp.network
+        system/ (service enables)
+      ssh/sshd_config.d/50-hardened.conf
+      tmpfiles.d/readwrite.conf
+build-kernel.sh               # Patched CVM guard kernel build script
+patches/                      # Kernel patches (BadAML CVM guard)
 docs/
-  deploy-gcp.md             # Google Cloud Platform deployment guide
-  deploy-ovhcloud.md        # OVHcloud bare-metal deployment guide
+  deploy-gcp.md
+  deploy-ovhcloud.md
 ```
 
 ## How updates work
@@ -243,7 +259,7 @@ docs/
 The rootfs is read-only — `apt install` on a running VM is impossible. To update:
 
 1. Edit configs in this repo (add/update packages, bump `ImageVersion`)
-2. `sudo mkosi build`
+2. `cd images/<name> && sudo mkosi build`
 3. Test locally with QEMU
 4. Upload and register the new image on your cloud platform
 5. Create new VM, attach existing data disk, delete old VM
@@ -254,8 +270,8 @@ The data partition (LUKS-encrypted, separate persistent disk) survives image upd
 
 To add services (e.g. a reverse proxy, database) on top of this base image:
 
-1. Add packages to `Packages=` in `mkosi.conf`, or drop static binaries into `mkosi.extra/usr/local/bin/`
-2. Add systemd unit files in `mkosi.extra/etc/systemd/system/`
+1. Add packages to `Packages=` in the image's `mkosi.conf`, or drop static binaries into `common/mkosi.extra/usr/local/bin/` (shared) or `images/<name>/mkosi.extra/` (image-specific)
+2. Add systemd unit files in the appropriate `mkosi.extra/etc/systemd/system/`
 3. Point data directories to `/data/` (the LUKS-encrypted persistent disk mount)
 4. Rebuild and redeploy
 

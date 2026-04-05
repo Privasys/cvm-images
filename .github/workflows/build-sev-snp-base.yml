@@ -1,18 +1,25 @@
-name: Build TDX Image
+name: Build SEV-SNP Base Image
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    paths:
+      - 'images/sev-snp-base/**'
+      - 'common/**'
+    tags: ['sev-snp-base-v*']
   pull_request:
     branches: [main]
+    paths:
+      - 'images/sev-snp-base/**'
+      - 'common/**'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build image
+    name: Build SEV-SNP base image
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -36,7 +43,7 @@ jobs:
         run: |
           # Git on the CI runner may check out symlink files as plain text.
           # Recreate them as real symlinks so mkosi overlays work correctly.
-          cd mkosi.extra/etc/systemd/system
+          cd common/mkosi.extra/etc/systemd/system
 
           for f in multi-user.target.wants/systemd-networkd.service \
                    sockets.target.wants/systemd-networkd.socket \
@@ -48,32 +55,36 @@ jobs:
             fi
           done
 
-          cd ../../../..
-          if [ -f mkosi.extra/etc/resolv.conf ] && [ ! -L mkosi.extra/etc/resolv.conf ]; then
-            target=$(cat mkosi.extra/etc/resolv.conf)
-            rm mkosi.extra/etc/resolv.conf
-            ln -s "$target" mkosi.extra/etc/resolv.conf
+          cd ../../../../..
+          f=common/mkosi.extra/etc/resolv.conf
+          if [ -f "$f" ] && [ ! -L "$f" ]; then
+            target=$(cat "$f")
+            rm "$f"
+            ln -s "$target" "$f"
           fi
 
       - name: Build image
-        run: sudo mkosi build
+        run: |
+          cd images/sev-snp-base
+          sudo mkosi build
 
       - name: Verify partitions
         run: |
-          sudo fdisk -l privasys-tdx-base_*.raw
+          RAW=$(ls images/sev-snp-base/privasys-sev-snp-base_*.raw)
+          sudo fdisk -l "$RAW"
           echo "---"
-          ls -lh privasys-tdx-base_*.raw
+          ls -lh "$RAW"
 
-      - name: Package for GCP
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Package for cloud
+        if: startsWith(github.ref, 'refs/tags/sev-snp-base-v')
         run: |
-          cp privasys-tdx-base_*.raw disk.raw
-          tar -czf privasys-tdx-base-${{ github.ref_name }}.tar.gz disk.raw
+          cp images/sev-snp-base/privasys-sev-snp-base_*.raw disk.raw
+          tar -czf privasys-sev-snp-base-${{ github.ref_name }}.tar.gz disk.raw
           rm disk.raw
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/sev-snp-base-v')
         uses: softprops/action-gh-release@v2
         with:
-          files: privasys-tdx-base-*.tar.gz
+          files: privasys-sev-snp-base-*.tar.gz
           generate_release_notes: true

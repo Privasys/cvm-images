@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+# Add NVIDIA CUDA repository for Ubuntu 24.04 (Noble).
+# Required for nvidia-driver-550-server, cuda-toolkit-12-6, and
+# nvidia-container-toolkit packages.
+
+# CUDA repo
+curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
+    -o /tmp/cuda-keyring.deb
+dpkg -i /tmp/cuda-keyring.deb
+rm /tmp/cuda-keyring.deb
+
+# nvidia-container-toolkit repo
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+    | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/\$(ARCH) /" \
+    > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+apt-get update

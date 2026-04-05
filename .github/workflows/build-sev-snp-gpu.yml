@@ -1,0 +1,106 @@
+name: Build SEV-SNP GPU Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'images/sev-snp-gpu/**'
+      - 'common/**'
+    tags: ['sev-snp-gpu-v*']
+  pull_request:
+    branches: [main]
+    paths:
+      - 'images/sev-snp-gpu/**'
+      - 'common/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build SEV-SNP GPU image
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+          df -h /
+
+      - name: Install mkosi
+        run: |
+          sudo pip3 install git+https://github.com/systemd/mkosi.git@v26 --break-system-packages
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            systemd-container bubblewrap \
+            systemd-ukify systemd-boot-efi \
+            mtools dosfstools e2fsprogs squashfs-tools \
+            cryptsetup erofs-utils \
+            pesign sbsigntool debootstrap systemd-boot
+
+      - name: Recreate symlinks
+        run: |
+          # Git on the CI runner may check out symlink files as plain text.
+          # Recreate them as real symlinks so mkosi overlays work correctly.
+          cd common/mkosi.extra/etc/systemd/system
+
+          for f in multi-user.target.wants/systemd-networkd.service \
+                   sockets.target.wants/systemd-networkd.socket \
+                   sysinit.target.wants/systemd-networkd-wait-online.service; do
+            if [ -f "$f" ] && [ ! -L "$f" ]; then
+              target=$(cat "$f")
+              rm "$f"
+              ln -s "$target" "$f"
+            fi
+          done
+
+          cd ../../../../..
+          f=common/mkosi.extra/etc/resolv.conf
+          if [ -f "$f" ] && [ ! -L "$f" ]; then
+            target=$(cat "$f")
+            rm "$f"
+            ln -s "$target" "$f"
+          fi
+
+          # GPU image NVIDIA service symlinks
+          cd images/sev-snp-gpu/mkosi.extra/etc/systemd/system/multi-user.target.wants
+          for f in nvidia-persistenced.service nvidia-fabricmanager.service; do
+            if [ -f "$f" ] && [ ! -L "$f" ]; then
+              target=$(cat "$f")
+              rm "$f"
+              ln -s "$target" "$f"
+            fi
+          done
+
+      - name: Build image
+        run: |
+          cd images/sev-snp-gpu
+          sudo mkosi build
+
+      - name: Verify partitions
+        run: |
+          RAW=$(ls images/sev-snp-gpu/privasys-sev-snp-gpu_*.raw)
+          sudo fdisk -l "$RAW"
+          echo "---"
+          ls -lh "$RAW"
+
+      - name: Package for cloud
+        if: startsWith(github.ref, 'refs/tags/sev-snp-gpu-v')
+        run: |
+          cp images/sev-snp-gpu/privasys-sev-snp-gpu_*.raw disk.raw
+          tar -czf privasys-sev-snp-gpu-${{ github.ref_name }}.tar.gz disk.raw
+          rm disk.raw
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/sev-snp-gpu-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: privasys-sev-snp-gpu-*.tar.gz
+          generate_release_notes: true
