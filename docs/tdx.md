@@ -46,7 +46,7 @@ These images are the **guest OS** layer. They sit on top of the host-side TDX st
                            │ creates / measures
 ┌──────────────────────────▼──────────────────────────────────┐
 │  canonical/tdx                          Host OS / hypervisor│
-│  Modified kernel, QEMU, OVMF/TDVF, libvirt patches         │
+│  Modified kernel, QEMU, OVMF/TDVF, libvirt patches          │
 │  Enables the host to launch TDX guests                      │
 │  Only needed on bare metal (cloud providers handle this)    │
 └──────────────────────────┬──────────────────────────────────┘
