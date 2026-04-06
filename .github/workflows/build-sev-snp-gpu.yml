@@ -79,6 +79,24 @@ jobs:
             fi
           done
 
+      - name: Set up NVIDIA repositories
+        run: |
+          # mkosi v26 runs apt on the host (with -o flags targeting the buildroot),
+          # so NVIDIA repos must be available on the host for package resolution.
+          # The mkosi.prepare script handles this for local builds, but in CI
+          # we must add the repos to the host explicitly.
+          curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
+              -o /tmp/cuda-keyring.deb
+          sudo dpkg -i /tmp/cuda-keyring.deb
+          rm /tmp/cuda-keyring.deb
+
+          curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+              | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/\$(ARCH) /" \
+              | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
+
+          sudo apt-get update
+
       - name: Build image
         run: |
           cd images/sev-snp-gpu

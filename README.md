@@ -20,18 +20,18 @@ This is the base OS image used by [Enclave OS Virtual](https://docs.privasys.org
 
 ## Trust chain
 
+The images use the same trust chain architecture regardless of the TEE platform (TDX or SEV-SNP):
+
 ```
-Silicon (TDX hardware)
-  └─ MRTD — measures the TD firmware (OVMF/TDVF) loaded by the hypervisor
-      └─ RTMR[0] — measures the firmware configuration
-          └─ Secure Boot — UEFI verifies shimx64.efi (Microsoft) → grubx64.efi (Canonical) → kernel
-              └─ RTMR[1] — measures the EFI boot path: shim and GRUB binaries (CC MR 2)
-                  └─ RTMR[2] — measures OS boot: kernel, initrd, cmdline with dm-verity root hash (CC MR 3)
-                      └─ dm-verity — every block of the rootfs verified against the hash tree
-                          └─ All userland binaries — any modification = I/O error + kernel panic
+Silicon (TEE hardware root of trust)
+  └─ Firmware measurement - measures the VM firmware loaded by the hypervisor
+      └─ Secure Boot - UEFI verifies each bootloader stage cryptographically
+          └─ Boot measurement - measures kernel, initrd, and command line into TEE registers
+              └─ dm-verity - every block of the rootfs verified against a Merkle hash tree
+                  └─ All userland binaries - any modification = I/O error + kernel panic
 ```
 
-Every byte of code that executes on the machine is either measured by TDX hardware or verified by dm-verity. No gaps.
+Every byte of code that executes on the machine is either measured by TEE hardware or verified by dm-verity. No gaps. For platform-specific measurement details, see [TDX](docs/tdx.md).
 
 ## Security documentation
 
@@ -42,13 +42,14 @@ Every byte of code that executes on the machine is either measured by TDX hardwa
 | [Encrypted storage](docs/encrypted-storage.md) | LUKS-encrypted persistent volumes with TEE-bound keys |
 | [Image integrity](docs/image-integrity.md) | Supply chain security, dm-verity, reproducible builds |
 | [GCP comparison](docs/gcp-comparison.md) | Why we build our own images instead of using Google's |
+| [Intel TDX](docs/tdx.md) | TDX trust chain, measurement registers, stack diagram |
 
 ## What's in the image
 
 | Component | Details |
 |-----------|---------|
 | Guest OS | Ubuntu 24.04 LTS (Noble Numbat) |
-| Kernel | `linux-image-generic-hwe-24.04` (6.19, HWE; auto-tracks latest; TDX + SEV guest support since 6.7) |
+| Kernel | `linux-image-generic-hwe-24.04` (6.19, HWE; auto-tracks latest; TDX + SEV guest support since 6.7) + [CVM Guard patch](patches/) |
 | Root filesystem | erofs (read-only) |
 | Integrity | dm-verity hash tree |
 | Boot | Signed shim (Microsoft) → signed GRUB (Canonical) → kernel + initrd + dm-verity roothash in cmdline |
@@ -142,50 +143,16 @@ Exit QEMU: `Ctrl-A X`
 
 ## Deployment guides
 
-| Platform | Guide | TDX host managed by |
-|----------|-------|---------------------|
-| Google Cloud Platform | [docs/deploy-gcp.md](docs/deploy-gcp.md) | Google |
-| OVHcloud bare metal (Scale-i1) | [docs/deploy-ovhcloud.md](docs/deploy-ovhcloud.md) | Operator (via [canonical/tdx](https://github.com/canonical/tdx)) |
+| Platform | TEE | Guide |
+|----------|-----|-------|
+| Google Cloud Platform | TDX | [docs/deploy-gcp.md](docs/deploy-gcp.md) |
+| OVHcloud bare metal (Scale-i1) | TDX | [docs/deploy-ovhcloud.md](docs/deploy-ovhcloud.md) |
 
-## Where this fits in the TDX stack
+## Where this fits
 
-This image is the **guest OS** layer. It sits on top of the host stack and below your application:
+These images are the **guest OS** layer. They run inside the TEE hardware (TDX Trust Domain or SEV-SNP VM), on top of the host/hypervisor managed by the cloud provider (or your own bare-metal stack), and below the application containers deployed via [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/).
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  intel/tdx-module                         Silicon firmware  │
-│  TDX SEAM module running inside the CPU                     │
-│  Creates & isolates Trust Domains, manages memory keys      │
-│  Ships in CPU microcode — not user-serviceable              │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ creates / measures
-┌──────────────────────────▼──────────────────────────────────┐
-│  canonical/tdx                          Host OS / hypervisor│
-│  Modified kernel, QEMU, OVMF/TDVF, libvirt patches          │
-│  Enables the host to launch TDX guests                      │
-│  Only needed on bare metal (cloud providers handle this)    │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ launches
-┌──────────────────────────▼──────────────────────────────────┐
-│  Privasys CVM Images (this repo)            Guest OS image  │
-│  GRUB boot, erofs root, dm-verity, attestation tools        │
-│  The workload runs here                                     │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ services go here
-┌──────────────────────────▼──────────────────────────────────┐
-│  Application layer                                          │
-│  Reverse proxies, databases, application binaries           │
-│  Built as a separate image on top of this base              │
-└─────────────────────────────────────────────────────────────┘
-```
-
-| | [intel/tdx-module](https://github.com/intel/tdx-module) | [canonical/tdx](https://github.com/canonical/tdx) | Privasys CVM Images |
-|---|---|---|---|
-| **What** | CPU firmware (SEAM module) | Host-side Linux + QEMU patches | Guest VM disk image |
-| **Runs where** | Inside the CPU | On the bare-metal host OS | Inside the Trust Domain |
-| **On managed cloud** | Managed by provider | Managed by provider | **This repo** |
-| **On bare metal** | In the CPU | **Operator installs** | **This repo** |
-| **Licence** | Intel proprietary | GPL-2.0 (Ubuntu/kernel) | AGPL-3.0 |
+For TDX-specific stack diagrams and measurement register details, see [docs/tdx.md](docs/tdx.md).
 
 ## Repository structure
 
@@ -218,10 +185,11 @@ build-kernel.sh               # Patched CVM guard kernel build script
 patches/                      # Kernel patches (BadAML CVM guard)
 docs/
   security.md                 # Security overview and threat model
-  hardening.md                # Operational hardening guide
+  hardening.md                # Security architecture and design decisions
   encrypted-storage.md        # LUKS-encrypted persistent volumes
   image-integrity.md          # Supply chain security and reproducible builds
   gcp-comparison.md           # Comparison with Google's Confidential VM images
+  tdx.md                      # Intel TDX trust chain and stack diagram
   deploy-gcp.md               # Google Cloud Platform deployment guide
   deploy-ovhcloud.md          # OVHcloud bare-metal deployment guide
 ```
@@ -244,14 +212,29 @@ These images provide the hardened base OS. To deploy applications (containers, s
 
 All application code deployed through Enclave OS Virtual is measured into the RA-TLS certificate's X.509 extensions, extending the trust chain from the base OS all the way to the application layer.
 
+## Vulnerability response
+
+A key advantage of maintaining our own CVM images is the ability to patch vulnerabilities immediately, without waiting for upstream vendors or cloud providers to act.
+
+**Example: BadAML (ACPI firmware injection).** When the BadAML vulnerability was disclosed, demonstrating that a hypervisor could inject malicious ACPI bytecode to access TEE-private memory, we developed and shipped a kernel patch within days. The CVM Guard patch (in [patches/](patches/)) blocks AML bytecode from accessing pages marked as private/encrypted. This was possible because we control the full image pipeline: kernel, rootfs, and boot chain. An adopter relying on a vendor-provided CVM image would have had to wait for the vendor to acknowledge, triage, patch, and release an updated image.
+
+This pattern applies to any future vulnerability in the TEE software stack:
+
+1. **We monitor** TEE vendor advisories, academic research, and upstream kernel security lists.
+2. **We patch** the affected component (kernel, firmware config, boot chain, systemd units) directly in this repository.
+3. **We rebuild** the image with the fix included and publish a new release with updated measurement values.
+4. **Adopters update** through [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/), which handles image rollout and attestation policy updates.
+
+The entire pipeline from patch to deployment runs through code we own and CI we control. There are no external gatekeepers.
+
 ## Design notes
 
 - **Why erofs?** Read-only by design, smaller than ext4, ideal for dm-verity. No accidental writes possible.
-- **Why GRUB instead of UKI?** GCP's TDX firmware (TDVF) enforces Secure Boot, which silently rejects unsigned EFI binaries including systemd-boot and unsigned UKIs. GRUB is the proven boot chain for TDX on GCP and other cloud platforms. TDX still measures the full boot chain (kernel, initrd, cmdline) into RTMR registers regardless of the bootloader used.
-- **Why `linux-image-generic-hwe-24.04`?** The HWE (Hardware Enablement) kernel tracks the latest LTS-backported kernel on Noble, currently 6.19. TDX and SEV guest support has been upstream since 6.7, so this works on any cloud or bare-metal platform.
+- **Why GRUB instead of UKI?** Cloud TDX firmware (TDVF) enforces Secure Boot, which silently rejects unsigned EFI binaries including systemd-boot and unsigned UKIs. GRUB is the proven boot chain for TDX and SEV-SNP on cloud platforms. The TEE hardware still measures the full boot chain regardless of the bootloader used.
+- **Why `linux-image-generic-hwe-24.04`?** The HWE (Hardware Enablement) kernel tracks the latest LTS-backported kernel on Noble, currently 6.19. TDX and SEV guest support has been upstream since 6.7.
 - **Why mkosi.extra symlinks instead of mkosi.postinst?** With erofs, the filesystem is already read-only when postinst runs. `systemctl enable` writes symlinks to `/etc`, which fails on a read-only filesystem.
 - **Why `Repositories=universe`?** Required for packages like `clevis` that aren't in Ubuntu's `main` repository.
-- **Why `CopyFiles=/:/` in the root partition config?** erofs requires explicit file population — without this directive, the root partition is empty.
+- **Why `CopyFiles=/:/` in the root partition config?** erofs requires explicit file population - without this directive, the root partition is empty.
 
 ## License
 
