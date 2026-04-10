@@ -88,3 +88,4 @@ jobs:
         with:
           files: privasys-sev-snp-base-*.tar.gz
           generate_release_notes: true
+          make_latest: false

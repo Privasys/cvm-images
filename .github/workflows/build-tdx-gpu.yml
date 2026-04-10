@@ -104,3 +104,4 @@ jobs:
         with:
           files: privasys-tdx-gpu-*.tar.gz
           generate_release_notes: true
+          make_latest: false
