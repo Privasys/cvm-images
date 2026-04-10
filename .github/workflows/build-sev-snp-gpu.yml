@@ -111,15 +111,23 @@ jobs:
         with:
           workload_identity_provider: projects/${{ vars.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/${{ vars.GCP_WIF_POOL }}/providers/${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          project_id: ${{ vars.GCP_PROJECT }}
 
       - name: Upload to GCS
         if: startsWith(github.ref, 'refs/tags/sev-snp-gpu-v') && steps.gcp-auth.outcome == 'success'
+        continue-on-error: true
+        id: gcs-upload
         run: |
           gcloud storage cp privasys-sev-snp-gpu-*.tar.zst gs://${{ env.GCS_BUCKET }}/
           echo "Uploaded to gs://${{ env.GCS_BUCKET }}/"
 
+      - name: Warn if GCS upload was skipped
+        if: startsWith(github.ref, 'refs/tags/sev-snp-gpu-v') && steps.gcs-upload.outcome != 'success'
+        run: |
+          echo "::warning::GCS upload failed or was skipped. The image was built but not uploaded to GCS. Fix the WIF IAM binding for Privasys/cvm-images."
+
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/sev-snp-gpu-v')
+        if: always() && startsWith(github.ref, 'refs/tags/sev-snp-gpu-v')
         uses: softprops/action-gh-release@v2
         with:
           body: |
