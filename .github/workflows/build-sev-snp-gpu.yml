@@ -13,6 +13,11 @@ on:
 
 permissions:
   contents: write
+  id-token: write   # Required for GCP Workload Identity Federation
+
+env:
+  GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'privasys-tdx-images' }}
 
 jobs:
   build:
@@ -92,15 +97,37 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/sev-snp-gpu-v')
         run: |
           RAW=$(basename images/sev-snp-gpu/privasys-sev-snp-gpu_*.raw)
-          tar -czf privasys-sev-snp-gpu-${{ github.ref_name }}.tar.gz \
+          tar --zstd -cf privasys-sev-snp-gpu-${{ github.ref_name }}.tar.zst \
             --transform "s|$RAW|disk.raw|" \
             -C images/sev-snp-gpu "$RAW"
+          ls -lh privasys-sev-snp-gpu-*.tar.zst
           rm images/sev-snp-gpu/"$RAW"
+
+      - name: Authenticate to GCP
+        if: startsWith(github.ref, 'refs/tags/sev-snp-gpu-v')
+        uses: google-github-actions/auth@v2
+        continue-on-error: true
+        id: gcp-auth
+        with:
+          workload_identity_provider: projects/${{ vars.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/${{ vars.GCP_WIF_POOL }}/providers/${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Upload to GCS
+        if: startsWith(github.ref, 'refs/tags/sev-snp-gpu-v') && steps.gcp-auth.outcome == 'success'
+        run: |
+          gcloud storage cp privasys-sev-snp-gpu-*.tar.zst gs://${{ env.GCS_BUCKET }}/
+          echo "Uploaded to gs://${{ env.GCS_BUCKET }}/"
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/sev-snp-gpu-v')
         uses: softprops/action-gh-release@v2
         with:
-          files: privasys-sev-snp-gpu-*.tar.gz
+          body: |
+            ## SEV-SNP GPU Image ${{ github.ref_name }}
+
+            Download from GCS:
+            ```
+            gcloud storage cp gs://${{ env.GCS_BUCKET }}/privasys-sev-snp-gpu-${{ github.ref_name }}.tar.zst .
+            ```
           generate_release_notes: true
           make_latest: false

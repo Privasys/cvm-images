@@ -13,6 +13,11 @@ on:
 
 permissions:
   contents: write
+  id-token: write   # Required for GCP Workload Identity Federation
+
+env:
+  GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'privasys-tdx-images' }}
 
 jobs:
   build:
@@ -92,15 +97,37 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/tdx-gpu-v')
         run: |
           RAW=$(basename images/tdx-gpu/privasys-tdx-gpu_*.raw)
-          tar -czf privasys-tdx-gpu-${{ github.ref_name }}.tar.gz \
+          tar --zstd -cf privasys-tdx-gpu-${{ github.ref_name }}.tar.zst \
             --transform "s|$RAW|disk.raw|" \
             -C images/tdx-gpu "$RAW"
+          ls -lh privasys-tdx-gpu-*.tar.zst
           rm images/tdx-gpu/"$RAW"
 
-      - name: Release
+      - name: Authenticate to GCP
+        if: startsWith(github.ref, 'refs/tags/tdx-gpu-v')
+        uses: google-github-actions/auth@v2
+        continue-on-error: true
+        id: gcp-auth
+        with:
+          workload_identity_provider: projects/${{ vars.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/${{ vars.GCP_WIF_POOL }}/providers/${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Upload to GCS
+        if: startsWith(github.ref, 'refs/tags/tdx-gpu-v') && steps.gcp-auth.outcome == 'success'
+        run: |
+          gcloud storage cp privasys-tdx-gpu-*.tar.zst gs://${{ env.GCS_BUCKET }}/
+          echo "Uploaded to gs://${{ env.GCS_BUCKET }}/"
+
+      - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/tdx-gpu-v')
         uses: softprops/action-gh-release@v2
         with:
-          files: privasys-tdx-gpu-*.tar.gz
+          body: |
+            ## TDX GPU Image ${{ github.ref_name }}
+
+            Download from GCS:
+            ```
+            gcloud storage cp gs://${{ env.GCS_BUCKET }}/privasys-tdx-gpu-${{ github.ref_name }}.tar.zst .
+            ```
           generate_release_notes: true
           make_latest: false
