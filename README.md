@@ -9,10 +9,11 @@ These images are the base OS layer used by [Enclave OS Virtual](https://docs.pri
 | Image | Directory | TEE | Description |
 |-------|-----------|-----|-------------|
 | **tdx-base** | `images/tdx-base/` | Intel TDX | Base image for TDX confidential VMs |
+| **tdx-gpu** | `images/tdx-gpu/` | Intel TDX + NVIDIA H100 | Confidential AI inference with GPU CC mode (GCP A3) |
 | **sev-snp-base** | `images/sev-snp-base/` | AMD SEV-SNP | Base image for SEV-SNP confidential VMs |
 | **sev-snp-gpu** | `images/sev-snp-gpu/` | AMD SEV-SNP + NVIDIA H100 | Confidential AI inference with GPU CC mode |
 
-All images share the same security architecture: erofs root, dm-verity, Secure Boot, kernel lockdown. Shared overlay files (network, SSH, tmpfiles) live in `common/mkosi.extra/`.
+All images share the same security architecture: erofs root, dm-verity, Secure Boot, kernel lockdown. Shared overlay files (network, SSH, tmpfiles) live in `common/mkosi.extra/`. GPU images add NVIDIA driver packages, CUDA toolkit, container runtime integration, and kernel command line parameters for Confidential Computing mode.
 
 The images are cloud-agnostic at their core, a standard GPT disk with a GRUB-booted kernel, erofs root, and dm-verity hash tree. They can run on any capable hypervisor (GCP, Azure, bare-metal QEMU/KVM). See [Deployment guides](#deployment-guides) for platform-specific instructions.
 
@@ -49,7 +50,7 @@ Every byte of code that executes on the machine is either measured by TEE hardwa
 | Component | Details |
 |-----------|---------|
 | Guest OS | Ubuntu 24.04 LTS (Noble Numbat) |
-| Kernel | `linux-image-generic-hwe-24.04` (6.19, HWE; auto-tracks latest; TDX + SEV guest support since 6.7) + [CVM Guard patch](patches/) |
+| Kernel | `linux-image-generic-hwe-24.04` (HWE; auto-tracks latest; TDX + SEV guest support since 6.2) + [CVM Guard patch](patches/) |
 | Root filesystem | erofs (read-only) |
 | Integrity | dm-verity hash tree |
 | Boot | Signed shim (Microsoft) → signed GRUB (Canonical) → kernel + initrd + dm-verity roothash in cmdline |
@@ -62,7 +63,7 @@ Every byte of code that executes on the machine is either measured by TEE hardwa
 
 ## Pre-built images
 
-Download the latest `.tar.gz` from [Releases](https://github.com/Privasys/cvm-images/releases). Releases are tagged per image: `tdx-base-v*`, `sev-snp-base-v*`, `sev-snp-gpu-v*`. Each release contains a raw disk image (`disk.raw` inside the archive) that can be imported into any capable platform.
+Download the latest `.tar.gz` from [Releases](https://github.com/Privasys/cvm-images/releases). Releases are tagged per image: `tdx-base-v*`, `tdx-gpu-v*`, `sev-snp-base-v*`, `sev-snp-gpu-v*`. Each release contains a raw disk image (`disk.raw` inside the archive) that can be imported into any capable platform.
 
 ## Building from source
 
@@ -92,6 +93,7 @@ cd cvm-images
 
 # Build a specific image:
 cd images/tdx-base && sudo mkosi build
+# or: cd images/tdx-gpu && sudo mkosi build
 # or: cd images/sev-snp-base && sudo mkosi build
 # or: cd images/sev-snp-gpu && sudo mkosi build
 ```
@@ -146,6 +148,7 @@ Exit QEMU: `Ctrl-A X`
 | Platform | TEE | Guide |
 |----------|-----|-------|
 | Google Cloud Platform | TDX | [docs/deploy-gcp.md](docs/deploy-gcp.md) |
+| Google Cloud Platform | TDX + GPU | [docs/deploy-gcp-gpu.md](docs/deploy-gcp-gpu.md) |
 | OVHcloud bare metal (Scale-i1) | TDX | [docs/deploy-ovhcloud.md](docs/deploy-ovhcloud.md) |
 
 ## Where this fits
@@ -162,6 +165,14 @@ images/
     mkosi.conf                # Image-specific configuration
     mkosi.conf.d/boot.conf    # TDX kernel command line
     mkosi.repart/             # Partition layout
+  tdx-gpu/                    # Intel TDX + NVIDIA H100
+    mkosi.conf                # Adds NVIDIA 590 open driver, CUDA 13, container toolkit
+    mkosi.conf.d/boot.conf    # GPU CC mode (iommu=pt, NVreg_ConfidentialComputing)
+    mkosi.extra/              # NVIDIA service enables
+    mkosi.pkgmanager/         # NVIDIA/CUDA apt repos + GPG keys + driver pinning
+    mkosi.prepare             # Fix stray depmod directory from nvidia-kernel-source
+    mkosi.postinst.chroot     # vmlinuz symlink, signed GRUB, vfat cleanup
+    mkosi.repart/             # Includes 500G data partition for model weights
   sev-snp-base/               # AMD SEV-SNP base image
     mkosi.conf
     mkosi.conf.d/boot.conf    # SEV kernel command line (mem_encrypt=on)
