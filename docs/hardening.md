@@ -109,7 +109,7 @@ When deployed through [Enclave OS Virtual](https://docs.privasys.org/solutions/e
 - **Image pinning by digest.** Container images are referenced by `sha256` digest, not mutable tags. This ensures the image content is deterministic and can be included in the attestation measurement.
 - **Attestation of container configuration.** The complete set of container images, their digests, and the runtime configuration are measured into the RA-TLS certificate's X.509 extensions, providing end-to-end verifiability from silicon to application.
 - **Minimal container capabilities.** Containers run with dropped Linux capabilities and read-only rootfs where possible.
-- **TLS termination via RA-TLS.** The attested reverse proxy (ra-tls-caddy) handles TLS termination at the edge, so containers serve plain HTTP internally while all external traffic is RA-TLS protected.
+- **TLS termination via RA-TLS.** The attested reverse proxy handles TLS termination at the edge, so containers serve plain HTTP internally while all external traffic is RA-TLS protected.
 
 ## GPU workloads (tdx-gpu and sev-snp-gpu)
 
