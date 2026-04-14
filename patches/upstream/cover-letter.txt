@@ -1,0 +1,118 @@
+Subject: [PATCH] ACPI: block AML access to confidential VM private memory
+
+Hi,
+
+This patch adds a guard to the ACPI SystemMemory space handler
+(acpi_ex_system_memory_space_handler) that prevents AML bytecode from
+reading or writing guest-private pages on confidential VMs (Intel TDX,
+AMD SEV-SNP).
+
+The problem
+-----------
+
+On CVMs, the host VMM supplies all ACPI tables to the guest, including
+SSDTs that can contain arbitrary AML bytecode.  AML SystemMemory
+OpRegions give the interpreter direct read/write access to physical
+memory via ioremap.  A malicious VMM can exploit this to:
+
+ - Exfiltrate guest secrets (keys, model weights, patient data)
+ - Overwrite kernel text, page tables, or initrd contents
+ - Bypass all CVM memory isolation guarantees
+
+This was documented as "BadAML" by Takekoshi et al. (ACM CCS 2025,
+BlackHat EU 2024):
+
+  https://doi.org/10.1145/3658644.3690208
+  https://www.blackhat.com/eu-24/briefings/schedule/#badaml-42039
+
+Note: acpi_no_initrd_table_override blocks table injection via the
+initrd only.  It does not protect against tables provided through the
+VMM's virtual firmware ACPI subsystem, which is the primary attack
+vector on CVMs.
+
+The fix
+-------
+
+A new file drivers/acpi/cvm_guard.c (compiled when
+CONFIG_ARCH_HAS_CC_PLATFORM is set) provides acpi_cvm_guard_deny_access().
+This function:
+
+ 1. Returns false immediately on non-CVM systems
+    (cc_platform_has(CC_ATTR_MEM_ENCRYPT) == false)
+
+ 2. On CVMs, walks the kernel page tables for the target address
+
+ 3. Checks the encryption bit via cc_mkenc() - if the page is
+    private, the access is denied with AE_AML_ILLEGAL_ADDRESS
+
+ 4. Fails closed: if the page table walk fails, the access is denied
+
+The guard is placed in exregion.c after the virtual address is resolved
+but before any read/write.  The ACPICA modification is 4 lines behind
+#ifdef CONFIG_ARCH_HAS_CC_PLATFORM.
+
+Design decisions
+----------------
+
+ - Guard in the handler, not in acpi_os_map_memory(): the mapping
+   itself is legitimate (the VMM maps the GPA correctly); the issue
+   is that AML should not be accessing those pages.
+
+ - Page table walk rather than address range check: the encryption bit
+   is the authoritative source of truth for what is private on both
+   TDX and SEV-SNP.  Address ranges can be manipulated by the VMM.
+
+ - Separate .c file outside drivers/acpi/acpica/: keeps Linux-specific
+   code (pgd_offset_k, cc_mkenc, cc_platform_has) out of the
+   ACPICA-synced directory.
+
+ - No new Kconfig option: reuses CONFIG_ARCH_HAS_CC_PLATFORM, which
+   is already set on x86 when TDX or SEV support is enabled.
+
+Testing
+-------
+
+Tested on GCP a3-highgpu-1g (Intel Sapphire Rapids TDX, NVIDIA H100)
+with Ubuntu 24.04 HWE kernel 6.17 (CONFIG_INTEL_TDX_GUEST=y).
+
+ - Boot: CVM guard activates, logs "active, AML access to private
+   pages will be denied"
+ - ACPI functionality: power management, thermal zones, PCI routing
+   all work (these access shared memory, not private pages)
+ - GPU driver: NVIDIA 590.48.01 with CC mode loads and operates
+   correctly (GPU uses shared/decrypted DMA pages, not private)
+
+Not tested on AMD SEV-SNP (no hardware available), but the
+cc_mkenc()/cc_platform_has() APIs are arch-neutral and the code path
+is symmetric.
+
+---
+
+Source tree and CI
+------------------
+
+The patch is maintained at:
+
+  https://github.com/Privasys/linux/tree/cvm-guard
+
+Based on v7.0-rc7.  CI builds the full x86_64 kernel with
+CONFIG_ARCH_HAS_CC_PLATFORM=y and runs checkpatch.pl.
+
+How to apply and test
+---------------------
+
+  $ git clone --branch cvm-guard https://github.com/Privasys/linux.git
+  $ cd linux
+  $ make defconfig
+  $ scripts/config --enable CONFIG_INTEL_TDX_GUEST
+  $ make olddefconfig
+  $ make -j$(nproc)
+
+Or apply the patch to your own tree:
+
+  $ git am 0001-ACPI-block-AML-access-to-confidential-VM-private-mem.patch
+
+Boot in a TDX or SEV-SNP VM and check dmesg:
+
+  $ dmesg | grep "CVM guard"
+  CVM guard: active, AML access to private pages will be denied
