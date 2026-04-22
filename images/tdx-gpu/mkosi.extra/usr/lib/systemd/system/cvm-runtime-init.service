@@ -1,0 +1,23 @@
+[Unit]
+Description=CVM (TDX + NVIDIA CC) runtime initialisation
+Documentation=https://github.com/Privasys/cvm-images
+DefaultDependencies=no
+# Run after /data is mounted (we read /data/nvidia-cc-bundle).
+# Run before any platform service that needs the GPU.
+After=local-fs.target data.mount
+Requires=local-fs.target
+Before=containerd.service manager.service caddy.service multi-user.target
+ConditionPathExists=/sys/firmware/tdx
+# Soft failure: don't block boot if NVIDIA setup fails.
+# Operators can inspect /run/cvm-runtime-init.log.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/cvm-runtime-init/cvm-runtime-init.sh
+RemainAfterExit=yes
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
