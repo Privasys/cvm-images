@@ -32,17 +32,10 @@ JOBS="$(nproc)"
 
 # Parse arguments
 KERNEL_VERSION=""
-# When true, only the GPU-init patch (0003 PMC_BOOT_42 synthesis) is
-# applied. Patch 0001 (TDX CC detection / set_memory_decrypted) and
-# 0002 (SG segment limit) are skipped, leaving DMA on the swiotlb
-# bounce buffer. This produces a deliberately slow bundle for
-# benchmarking the bounce-buffer-bypass patch.
-NO_PERF_PATCHES="${NO_PERF_PATCHES:-0}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
         --kernel-version) KERNEL_VERSION="$2"; shift 2 ;;
-        --no-perf-patches) NO_PERF_PATCHES=1; shift ;;
         *) shift ;;
     esac
 done
@@ -108,13 +101,8 @@ cd "$SRC_DIR"
 
 # -- Step 3: Apply TDX CC patches --
 echo ""
-if [ "$NO_PERF_PATCHES" = "1" ]; then
-    echo "=== Applying NVIDIA patches (NO-PATCH mode: only 0003 PMC_BOOT_42) ==="
-    PATCH_GLOB="$PATCH_DIR/0003-*.patch"
-else
-    echo "=== Applying TDX CC patches (full set) ==="
-    PATCH_GLOB="$PATCH_DIR/00*.patch"
-fi
+echo "=== Applying TDX CC patches (full set) ==="
+PATCH_GLOB="$PATCH_DIR/00*.patch"
 for patch_file in $PATCH_GLOB; do
     [ -f "$patch_file" ] || continue
     name=$(basename "$patch_file")
@@ -162,14 +150,11 @@ cat > "$OUTPUT_DIR/BUILD-INFO" <<EOF
 nvidia_version=$NVIDIA_VERSION
 kernel_version=$KERNEL_VERSION
 build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-no_perf_patches=$NO_PERF_PATCHES
 patches=$(ls -1 $PATCH_GLOB 2>/dev/null | xargs -I{} basename {} | tr '\n' ' ')
 EOF
 
 # Create tarball
-SUFFIX=""
-[ "$NO_PERF_PATCHES" = "1" ] && SUFFIX="-nopatch"
-BUNDLE_TAR="$(dirname "$OUTPUT_DIR")/nvidia-cc-bundle${SUFFIX}-${NVIDIA_VERSION}-${KERNEL_VERSION}.tar.gz"
+BUNDLE_TAR="$(dirname "$OUTPUT_DIR")/nvidia-cc-bundle-${NVIDIA_VERSION}-${KERNEL_VERSION}.tar.gz"
 tar -czf "$BUNDLE_TAR" -C "$(dirname "$OUTPUT_DIR")" "$(basename "$OUTPUT_DIR")"
 echo ""
 echo "Bundle: $BUNDLE_TAR"

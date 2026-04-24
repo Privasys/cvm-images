@@ -2,13 +2,9 @@ name: Build NVIDIA CC Modules
 
 on:
   push:
-    tags: ['nvidia-cc-v*', 'nvidia-cc-nopatch-v*']
+    tags: ['nvidia-cc-v*']
   workflow_dispatch:
     inputs:
-      no_perf_patches:
-        description: 'Skip perf patches 0001 and 0002 (bounce-buffer benchmark build)'
-        type: boolean
-        default: false
       kernel_version:
         description: 'Override kernel version (e.g. 6.17.0-20-generic). Empty = pick latest installed.'
         type: string
@@ -45,7 +41,6 @@ jobs:
 
       - name: Build patched modules
         env:
-          NO_PERF_PATCHES: ${{ (startsWith(github.ref, 'refs/tags/nvidia-cc-nopatch-v') || github.event.inputs.no_perf_patches == 'true') && '1' || '0' }}
           KERNEL_VERSION_OVERRIDE: ${{ github.event.inputs.kernel_version }}
         run: |
           if [ -n "$KERNEL_VERSION_OVERRIDE" ]; then
@@ -63,14 +58,14 @@ jobs:
       - name: Upload bundle
         uses: actions/upload-artifact@v4
         with:
-          name: nvidia-cc-bundle${{ (startsWith(github.ref, 'refs/tags/nvidia-cc-nopatch-v') || github.event.inputs.no_perf_patches == 'true') && '-nopatch' || '' }}
+          name: nvidia-cc-bundle
           path: |
             nvidia-cc-bundle*.tar.gz
             nvidia-cc-bundle/BUILD-INFO
           retention-days: 90
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/nvidia-cc-v') || startsWith(github.ref, 'refs/tags/nvidia-cc-nopatch-v')
+        if: startsWith(github.ref, 'refs/tags/nvidia-cc-v')
         uses: softprops/action-gh-release@v2
         with:
           files: nvidia-cc-bundle*.tar.gz
