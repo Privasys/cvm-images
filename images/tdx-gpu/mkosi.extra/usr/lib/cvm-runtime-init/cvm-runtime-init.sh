@@ -89,10 +89,10 @@ INSMOD_RC=1
 if [ -f "$BUNDLE_DIR/nvidia.ko" ]; then
   echo ">>> Loading patched nvidia module"
   # Set firmware path so the module finds gsp_ga10x.bin.
-  mkdir -p /run/nvidia-firmware/nvidia/590.48.01
-  if [ -f /lib/firmware/nvidia/590.48.01/gsp_ga10x.bin ]; then
-    cp /lib/firmware/nvidia/590.48.01/gsp_ga10x.bin \
-       /run/nvidia-firmware/nvidia/590.48.01/ 2>/dev/null || true
+  mkdir -p /run/nvidia-firmware/nvidia/595.58.03
+  if [ -f /lib/firmware/nvidia/595.58.03/gsp_ga10x.bin ]; then
+    cp /lib/firmware/nvidia/595.58.03/gsp_ga10x.bin \
+       /run/nvidia-firmware/nvidia/595.58.03/ 2>/dev/null || true
   fi
   echo /run/nvidia-firmware > /sys/module/firmware_class/parameters/path
 

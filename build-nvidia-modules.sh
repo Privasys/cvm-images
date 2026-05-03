@@ -2,14 +2,14 @@
 # Build patched NVIDIA open kernel modules for TDX Confidential Computing.
 #
 # This script:
-#   1. Downloads the NVIDIA open-gpu-kernel-modules source (590.48.01)
+#   1. Downloads the NVIDIA open-gpu-kernel-modules source (595.58.03)
 #   2. Applies the TDX CC patches from patches/nvidia/
 #   3. Builds kernel modules against the specified kernel headers
 #   4. Packages the modules + GSP firmware into a tarball
 #
 # The resulting nvidia-cc-bundle contains:
 #   modules/nvidia.ko, nvidia-uvm.ko, nvidia-modeset.ko
-#   firmware/nvidia/590.48.01/gsp_ga10x.bin, gsp_tu10x.bin
+#   firmware/nvidia/595.58.03/gsp_ga10x.bin, gsp_tu10x.bin
 #
 # Requirements:
 #   - Ubuntu 24.04 build environment
@@ -25,7 +25,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PATCH_DIR="$SCRIPT_DIR/patches/nvidia"
 OUTPUT_DIR="${1:-$SCRIPT_DIR/nvidia-cc-bundle}"
-NVIDIA_VERSION="590.48.01"
+NVIDIA_VERSION="595.58.03"
 NVIDIA_URL="https://github.com/NVIDIA/open-gpu-kernel-modules/archive/refs/tags/${NVIDIA_VERSION}.tar.gz"
 BUILD_DIR="/tmp/privasys-nvidia-build-$$"
 JOBS="$(nproc)"

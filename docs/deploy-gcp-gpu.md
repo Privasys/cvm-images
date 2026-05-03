@@ -70,7 +70,7 @@ dmesg | grep -i tdx
 
 # Check GPU
 nvidia-smi
-# Expected: H100 80GB, driver 590.48.01, CUDA 13.0
+# Expected: H100 80GB, driver 595.58.03, CUDA 13.0
 
 # Check CC mode
 nvidia-smi -q | grep -A5 "Confidential Compute"

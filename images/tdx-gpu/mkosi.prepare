@@ -1,7 +1,7 @@
 #!/bin/bash
 set -eu
 
-# nvidia-kernel-source-590-server-open creates a stray /usr/lib/modules/kernel/
+# nvidia-kernel-source-595-server-open creates a stray /usr/lib/modules/kernel/
 # directory during package installation.  mkosi's run_depmod() iterates all
 # directories under /usr/lib/modules/ and runs "depmod --all <dirname>" for
 # each one, so "kernel" is passed as a version string and depmod fails with

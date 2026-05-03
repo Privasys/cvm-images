@@ -17,7 +17,7 @@ Pin-Priority: 600
 # Block nvidia driver/lib packages from the CUDA repo.  These exist in
 # BOTH the CUDA repo and Ubuntu's restricted repo with incompatible
 # versions.  The pre-built Canonical-signed kernel modules
-# (linux-modules-nvidia-590-server-open-generic) require the Ubuntu
+# (linux-modules-nvidia-595-server-open-generic) require the Ubuntu
 # versions.  CUDA-only libraries (libcufile-*, libnvjitlink-*, etc.)
 # are NOT affected by this block.
 Package: nvidia-* libnvidia-* xserver-xorg-video-nvidia-*
