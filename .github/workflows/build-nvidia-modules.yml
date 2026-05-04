@@ -51,15 +51,13 @@ jobs:
           mkdir -p /tmp/kernel-debs
           gh release download "$KERNEL_TAG" --repo "${{ github.repository }}" \
             --pattern 'linux-headers-*.deb' \
-            --pattern 'linux-image-unsigned-*.deb' \
-            --pattern 'linux-modules-*.deb' \
             --dir /tmp/kernel-debs
           ls -lh /tmp/kernel-debs/
-          # We only need linux-headers-* and linux-modules-* installed so
-          # the build can resolve symbols + Module.symvers. The image deb
-          # is downloaded for completeness but not required.
-          sudo apt-get install -y --no-install-recommends /tmp/kernel-debs/linux-headers-*.deb /tmp/kernel-debs/linux-modules-*.deb || \
-            sudo dpkg -i /tmp/kernel-debs/linux-headers-*.deb /tmp/kernel-debs/linux-modules-*.deb
+          # build-nvidia-modules.sh only needs /usr/src/linux-headers-$KVER/
+          # to be populated. Installing linux-image-*/linux-modules-*.deb is
+          # unnecessary (and dpkg would fail because their dependencies are
+          # not satisfied on the GHA Ubuntu runner).
+          sudo dpkg -i /tmp/kernel-debs/linux-headers-*.deb
           # Resolve and export the kernel version we just installed.
           KVER=$(basename /tmp/kernel-debs/linux-headers-*.deb | sed 's/^linux-headers-//; s/_.*//' | head -1)
           echo "KERNEL_VERSION_OVERRIDE=$KVER" >> "$GITHUB_ENV"
