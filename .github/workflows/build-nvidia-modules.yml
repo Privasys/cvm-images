@@ -53,13 +53,21 @@ jobs:
             --pattern 'linux-headers-*.deb' \
             --dir /tmp/kernel-debs
           ls -lh /tmp/kernel-debs/
-          # build-nvidia-modules.sh only needs /usr/src/linux-headers-$KVER/
-          # to be populated. Installing linux-image-*/linux-modules-*.deb is
-          # unnecessary (and dpkg would fail because their dependencies are
-          # not satisfied on the GHA Ubuntu runner).
-          sudo dpkg -i /tmp/kernel-debs/linux-headers-*.deb
-          # Resolve and export the kernel version we just installed.
+          # The per-flavor linux-headers-$KVER-generic.deb is just the
+          # arch-specific overlay; it depends on linux-hwe-6.17-headers-$KVER
+          # (the flavor-independent base headers) which is published in the
+          # Ubuntu archive (build-kernel.sh in cvm-images doesn't currently
+          # ship it; the upstream package satisfies the dep cleanly because
+          # our BadAML patch only touches drivers/acpi/, not include/).
           KVER=$(basename /tmp/kernel-debs/linux-headers-*.deb | sed 's/^linux-headers-//; s/_.*//' | head -1)
+          KABI="${KVER%-generic}"
+          KSERIES="${KABI%-*}"
+          BASE_PKG="linux-hwe-${KSERIES}-headers-${KABI}"
+          echo "Installing base headers package $BASE_PKG from Ubuntu archive"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends "$BASE_PKG"
+          sudo dpkg -i /tmp/kernel-debs/linux-headers-*.deb
+          ls -d /usr/src/linux-headers-"$KVER" || { echo "::error::headers tree missing"; exit 1; }
           echo "KERNEL_VERSION_OVERRIDE=$KVER" >> "$GITHUB_ENV"
           echo "KERNEL_TAG=$KERNEL_TAG" >> "$GITHUB_ENV"
           echo "Resolved kernel version: $KVER"
