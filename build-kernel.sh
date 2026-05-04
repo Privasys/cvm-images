@@ -159,6 +159,18 @@ echo ""
 echo "=== Building kernel .deb packages ==="
 KBUILD_LOG="$BUILD_DIR/build.log"
 
+# Disable DKMS modules that are useless on a server CVM and that drag in
+# external launchpad downloads which periodically time out (see cvm-images
+# CI run 25291202275 — v4l2loopback fetch from launchpad.net stalled out).
+# v4l2loopback = virtual webcam, iwlwifi = Intel laptop wifi, zfs = ZFS DKMS.
+for mk in $(find . -maxdepth 4 -path "*/debian*/rules.d/*.mk" 2>/dev/null); do
+    sed -i \
+        -e 's/^do_dkms_v4l2loopback[[:space:]]*=.*/do_dkms_v4l2loopback = false/' \
+        -e 's/^do_dkms_iwlwifi[[:space:]]*=.*/do_dkms_iwlwifi = false/' \
+        -e 's/^do_dkms_zfs[[:space:]]*=.*/do_dkms_zfs = false/' \
+        "$mk" && echo "Disabled unused DKMS modules in $mk"
+done
+
 # Skip debug packages and ABI checks to save ~50 GB disk.
 export skipdbg=true
 export skipabi=true
