@@ -5,8 +5,8 @@ on:
     tags: ['nvidia-cc-v*']
   workflow_dispatch:
     inputs:
-      kernel_version:
-        description: 'Override kernel version (e.g. 6.17.0-20-generic). Empty = pick latest installed.'
+      kernel_tag:
+        description: 'cvm-images kernel-v* release tag to build against (default: latest)'
         type: string
         default: ''
 
@@ -26,34 +26,59 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
           df -h /
 
-      - name: Install matching kernel headers (if kernel_version set)
-        if: github.event.inputs.kernel_version != ''
+      - name: Install matching kernel headers from cvm-images kernel-v* release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KERNEL_TAG_INPUT: ${{ github.event.inputs.kernel_tag }}
         run: |
-          KVER='${{ github.event.inputs.kernel_version }}'
-          echo "Requested kernel: $KVER"
-          # Mainline-PPA-style fetch from Ubuntu archive
-          sudo apt-get update -qq
-          sudo apt-get install -y "linux-headers-$KVER" || {
-            echo "linux-headers-$KVER not available in default repo, trying generic-hwe-24.04-edge"
-            sudo apt-get install -y linux-headers-generic-hwe-24.04-edge || true
-            ls /usr/src/ | grep linux-headers
-          }
+          # The patched HWE kernel ABI must match the one shipped in the
+          # most recent cvm-images kernel-v* release (or the tag specified
+          # via workflow_dispatch). Downloading the .deb directly from that
+          # release guarantees ABI lock-step with enclave-os-virtual images
+          # which install the same .deb at build time.
+          set -euo pipefail
+          if [ -n "${KERNEL_TAG_INPUT:-}" ]; then
+            KERNEL_TAG="$KERNEL_TAG_INPUT"
+          else
+            KERNEL_TAG=$(gh release list --repo "${{ github.repository }}" \
+              --json tagName -q '.[].tagName' | grep '^kernel-v' | head -1)
+          fi
+          if [ -z "$KERNEL_TAG" ]; then
+            echo "::error::No kernel-v* release found in ${{ github.repository }}"
+            exit 1
+          fi
+          echo "Using kernel release: $KERNEL_TAG"
+          mkdir -p /tmp/kernel-debs
+          gh release download "$KERNEL_TAG" --repo "${{ github.repository }}" \
+            --pattern 'linux-headers-*.deb' \
+            --pattern 'linux-image-unsigned-*.deb' \
+            --pattern 'linux-modules-*.deb' \
+            --dir /tmp/kernel-debs
+          ls -lh /tmp/kernel-debs/
+          # We only need linux-headers-* and linux-modules-* installed so
+          # the build can resolve symbols + Module.symvers. The image deb
+          # is downloaded for completeness but not required.
+          sudo apt-get install -y --no-install-recommends /tmp/kernel-debs/linux-headers-*.deb /tmp/kernel-debs/linux-modules-*.deb || \
+            sudo dpkg -i /tmp/kernel-debs/linux-headers-*.deb /tmp/kernel-debs/linux-modules-*.deb
+          # Resolve and export the kernel version we just installed.
+          KVER=$(basename /tmp/kernel-debs/linux-headers-*.deb | sed 's/^linux-headers-//; s/_.*//' | head -1)
+          echo "KERNEL_VERSION_OVERRIDE=$KVER" >> "$GITHUB_ENV"
+          echo "KERNEL_TAG=$KERNEL_TAG" >> "$GITHUB_ENV"
+          echo "Resolved kernel version: $KVER"
 
       - name: Build patched modules
-        env:
-          KERNEL_VERSION_OVERRIDE: ${{ github.event.inputs.kernel_version }}
         run: |
-          if [ -n "$KERNEL_VERSION_OVERRIDE" ]; then
-            sudo -E ./build-nvidia-modules.sh --kernel-version "$KERNEL_VERSION_OVERRIDE" --output-dir "${{ github.workspace }}/nvidia-cc-bundle"
-          else
-            sudo -E ./build-nvidia-modules.sh --output-dir "${{ github.workspace }}/nvidia-cc-bundle"
-          fi
-          echo "### NVIDIA CC Module Bundle" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cat nvidia-cc-bundle/BUILD-INFO >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          ls -lh nvidia-cc-bundle/modules/*.ko >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          sudo -E ./build-nvidia-modules.sh --kernel-version "$KERNEL_VERSION_OVERRIDE" --output-dir "${{ github.workspace }}/nvidia-cc-bundle"
+          {
+            echo "### NVIDIA CC Module Bundle"
+            echo "Built against cvm-images **$KERNEL_TAG** ($KERNEL_VERSION_OVERRIDE)"
+            echo '```'
+            cat nvidia-cc-bundle/BUILD-INFO
+            echo
+            ls -lh nvidia-cc-bundle/modules/*.ko
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload bundle
         uses: actions/upload-artifact@v4

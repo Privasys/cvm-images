@@ -24,13 +24,25 @@
 #   - Hostname, SSH keys, manager.env - those are VM-specific glue done
 #     by the GCE startup script.
 #
-# Exits 0 even on partial failure (e.g. no nvidia-cc-bundle yet) so the
-# unit doesn't block boot. The systemd unit also has a soft failure
-# mode (Type=oneshot, no Required dependents).
+# Failure semantics:
+#   - bundle missing on /data       -> exit 0  (operator hasn't transferred yet)
+#   - bundle present but insmod RC!=0 -> exit 1  (ABI/signature mismatch -- a
+#     silent fall-through here previously let udev auto-load the unpatched
+#     stock nvidia-*-server module, masking the regression. Fail loudly so
+#     the manager service refuses to start any GPU container.)
+#
+# A status marker is written to /run/cvm-runtime-init.status with one of:
+#   ok          -- patched bundle loaded, GPU ready
+#   no-bundle   -- /data/nvidia-cc-bundle/modules/nvidia.ko missing
+#   insmod-fail -- bundle present, insmod returned non-zero (vermagic / sig)
+#   smi-fail    -- module loaded but nvidia-smi conf-compute -srs failed
 
 set -uo pipefail
 exec > /run/cvm-runtime-init.log 2>&1
 echo "=== cvm-runtime-init started at $(date) ==="
+STATUS_FILE=/run/cvm-runtime-init.status
+write_status() { echo "$1" > "$STATUS_FILE"; }
+write_status starting
 
 # ── 1. PAM fix ───────────────────────────────────────────────────────────
 # pam_systemd.so fails in TDX guests (cgroup setup unavailable to the
@@ -86,6 +98,15 @@ sleep 2
 # on the operator placing the bundle on /data.
 BUNDLE_DIR=/data/nvidia-cc-bundle/modules
 INSMOD_RC=1
+if [ ! -f "$BUNDLE_DIR/nvidia.ko" ]; then
+  echo "ERROR: $BUNDLE_DIR/nvidia.ko not found."
+  echo "  The operator must transfer the cvm-images nvidia-cc-v* bundle to /data"
+  echo "  before this VM can serve GPU workloads. See deploy/confidential-ai.md."
+  write_status no-bundle
+  # First-boot allowance: don't fail systemd so the operator can SSH in
+  # and run the deploy script. Manager will refuse GPU containers anyway.
+  exit 0
+fi
 if [ -f "$BUNDLE_DIR/nvidia.ko" ]; then
   echo ">>> Loading patched nvidia module"
   # Set firmware path so the module finds gsp_ga10x.bin.
@@ -102,6 +123,18 @@ if [ -f "$BUNDLE_DIR/nvidia.ko" ]; then
   INSMOD_RC=$?
   echo "insmod RC=$INSMOD_RC"
 
+  if [ "$INSMOD_RC" -ne 0 ]; then
+    echo "ERROR: insmod of patched nvidia.ko failed (RC=$INSMOD_RC)."
+    echo "  Likely vermagic mismatch (bundle built for a different kernel ABI)"
+    echo "  or signature rejected. Bundle modinfo:"
+    /sbin/modinfo "$BUNDLE_DIR/nvidia.ko" 2>&1 | grep -E '^(vermagic|version|sig_id)' || true
+    echo "  Running kernel: $(uname -r)"
+    echo "  Re-tag cvm-images nvidia-cc-v* against the matching kernel-v* release."
+    write_status insmod-fail
+    # Fail loudly: do NOT let udev auto-load the stock unpatched module.
+    exit 1
+  fi
+
   # Wait for GPU FSP initialisation.
   for i in $(seq 1 30); do
     if grep -q nvidia-frontend /proc/devices 2>/dev/null; then
@@ -110,8 +143,6 @@ if [ -f "$BUNDLE_DIR/nvidia.ko" ]; then
     fi
     sleep 1
   done
-else
-  echo "WARNING: $BUNDLE_DIR/nvidia.ko not found, skipping NVIDIA CC bring-up"
 fi
 
 # ── 5. Device nodes + UVM ───────────────────────────────────────────────
@@ -137,8 +168,13 @@ if [ "$INSMOD_RC" -eq 0 ]; then
   # ── 6. nvidia-smi setup ────────────────────────────────────────────────
   echo ">>> nvidia-smi setup"
   nvidia-smi -pm 1                        || echo "WARNING: persistence mode failed"
-  nvidia-smi conf-compute -srs 1          || echo "WARNING: CC ready state failed"
+  if ! nvidia-smi conf-compute -srs 1; then
+    echo "ERROR: nvidia-smi conf-compute -srs failed -- GPU not in CC ready state"
+    write_status smi-fail
+    exit 1
+  fi
   nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader || true
+  write_status ok
 fi
 
 # ── 7. CDI generation ───────────────────────────────────────────────────
