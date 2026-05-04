@@ -61,7 +61,8 @@ jobs:
           # our BadAML patch only touches drivers/acpi/, not include/).
           KVER=$(basename /tmp/kernel-debs/linux-headers-*.deb | sed 's/^linux-headers-//; s/_.*//' | head -1)
           KABI="${KVER%-generic}"
-          KSERIES="${KABI%-*}"
+          # Series is major.minor only (e.g. 6.17), not 6.17.0
+          KSERIES=$(echo "$KABI" | cut -d. -f1-2)
           BASE_PKG="linux-hwe-${KSERIES}-headers-${KABI}"
           echo "Installing base headers package $BASE_PKG from Ubuntu archive"
           sudo apt-get update -qq
