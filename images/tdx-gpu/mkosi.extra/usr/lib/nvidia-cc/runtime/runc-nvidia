@@ -1,0 +1,7 @@
+#!/bin/sh
+# runc-nvidia: bind-mounted over /usr/sbin/runc by cvm-runtime-init.sh.
+# Delegates every container start to nvidia-container-runtime, which
+# in turn re-execs the real runc at /usr/sbin/runc.real (preserved
+# under that name in the image precisely so this wrapper can take over
+# the canonical /usr/sbin/runc path without recursion).
+exec /usr/bin/nvidia-container-runtime "$@"

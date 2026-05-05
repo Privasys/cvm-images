@@ -12,11 +12,14 @@
 #      from initrd; they are not CC-capable).
 #   3. PCI Function Level Reset on the GPU to clear FSP state.
 #   4. Load the patched (CC-capable) nvidia + nvidia-uvm modules from
-#      /data/nvidia-cc-bundle/modules/ if present.
+#      /usr/lib/nvidia-cc/$(uname -r)/ (baked into the image).
 #   5. Create /dev/nvidia* device nodes (no devtmpfs/udev for this).
 #   6. nvidia-smi: persistence mode + CC ready state.
 #   7. Generate /var/run/cdi/nvidia.yaml so containerd can inject the
 #      GPU into containers via CDI.
+#   8. Install nvidia-container-runtime legacy-mode wrapper and config
+#      via tmpfs bind-mounts (config files are baked in the image at
+#      /usr/lib/nvidia-cc/runtime/, not on /data).
 #
 # Intentionally NOT here:
 #   - Disk mounting (image-*, model-*) - that is the disk-mounter service
@@ -25,15 +28,14 @@
 #     by the GCE startup script.
 #
 # Failure semantics:
-#   - bundle missing on /data       -> exit 0  (operator hasn't transferred yet)
-#   - bundle present but insmod RC!=0 -> exit 1  (ABI/signature mismatch -- a
-#     silent fall-through here previously let udev auto-load the unpatched
-#     stock nvidia-*-server module, masking the regression. Fail loudly so
-#     the manager service refuses to start any GPU container.)
+#   - patched module missing for $(uname -r) -> exit 1 (image bug, must
+#     be a kernel-v* / nvidia-cc-v* version mismatch in the image build)
+#   - insmod RC!=0 -> exit 1 (vermagic mismatch / signature rejected)
+#   - nvidia-smi conf-compute -srs fails -> exit 1
 #
 # A status marker is written to /run/cvm-runtime-init.status with one of:
 #   ok          -- patched bundle loaded, GPU ready
-#   no-bundle   -- /data/nvidia-cc-bundle/modules/nvidia.ko missing
+#   no-bundle   -- /usr/lib/nvidia-cc/$(uname -r)/nvidia.ko missing (image bug)
 #   insmod-fail -- bundle present, insmod returned non-zero (vermagic / sig)
 #   smi-fail    -- module loaded but nvidia-smi conf-compute -srs failed
 
@@ -92,58 +94,55 @@ done
 sleep 2
 
 # ── 4. Load patched NVIDIA CC modules ───────────────────────────────────
-# The modules ship as a tarball on /data/nvidia-cc-bundle/. They are
-# built per-kernel-version and signed with the cvm-images Secure Boot
-# key. Until the bundle is baked into the image (TODO), this depends
-# on the operator placing the bundle on /data.
-BUNDLE_DIR=/data/nvidia-cc-bundle/modules
+# The patched modules are baked into the image at
+#   /usr/lib/nvidia-cc/$(uname -r)/{nvidia.ko,nvidia-uvm.ko}
+# alongside the matching GSP firmware at
+#   /usr/lib/nvidia-cc/$(uname -r)/firmware/nvidia/<NV_VER>/.
+# The cvm-images CI tags kernel-v* + nvidia-cc-v* together so the bundle
+# ABI always matches the running kernel; if it does not the image build
+# itself is broken (no /data dependency, no operator scp).
+KVER=$(uname -r)
+BUNDLE_DIR=/usr/lib/nvidia-cc/${KVER}/modules
+FW_ROOT=/usr/lib/nvidia-cc/${KVER}/firmware
 INSMOD_RC=1
 if [ ! -f "$BUNDLE_DIR/nvidia.ko" ]; then
   echo "ERROR: $BUNDLE_DIR/nvidia.ko not found."
-  echo "  The operator must transfer the cvm-images nvidia-cc-v* bundle to /data"
-  echo "  before this VM can serve GPU workloads. See deploy/confidential-ai.md."
+  echo "  The image is missing patched NVIDIA modules for kernel $KVER."
+  echo "  The cvm-images kernel-v* and nvidia-cc-v* bundle baked into this"
+  echo "  image are out of sync. Rebuild the image with matching tags."
   write_status no-bundle
-  # First-boot allowance: don't fail systemd so the operator can SSH in
-  # and run the deploy script. Manager will refuse GPU containers anyway.
-  exit 0
+  exit 1
 fi
-if [ -f "$BUNDLE_DIR/nvidia.ko" ]; then
-  echo ">>> Loading patched nvidia module"
-  # Set firmware path so the module finds gsp_ga10x.bin.
-  mkdir -p /run/nvidia-firmware/nvidia/595.58.03
-  if [ -f /lib/firmware/nvidia/595.58.03/gsp_ga10x.bin ]; then
-    cp /lib/firmware/nvidia/595.58.03/gsp_ga10x.bin \
-       /run/nvidia-firmware/nvidia/595.58.03/ 2>/dev/null || true
-  fi
-  echo /run/nvidia-firmware > /sys/module/firmware_class/parameters/path
-
-  insmod "$BUNDLE_DIR/nvidia.ko" \
-    NVreg_OpenRmEnableUnsupportedGpus=1 \
-    NVreg_RegistryDwords="RmConfidentialCompute=1"
-  INSMOD_RC=$?
-  echo "insmod RC=$INSMOD_RC"
-
-  if [ "$INSMOD_RC" -ne 0 ]; then
-    echo "ERROR: insmod of patched nvidia.ko failed (RC=$INSMOD_RC)."
-    echo "  Likely vermagic mismatch (bundle built for a different kernel ABI)"
-    echo "  or signature rejected. Bundle modinfo:"
-    /sbin/modinfo "$BUNDLE_DIR/nvidia.ko" 2>&1 | grep -E '^(vermagic|version|sig_id)' || true
-    echo "  Running kernel: $(uname -r)"
-    echo "  Re-tag cvm-images nvidia-cc-v* against the matching kernel-v* release."
-    write_status insmod-fail
-    # Fail loudly: do NOT let udev auto-load the stock unpatched module.
-    exit 1
-  fi
-
-  # Wait for GPU FSP initialisation.
-  for i in $(seq 1 30); do
-    if grep -q nvidia-frontend /proc/devices 2>/dev/null; then
-      echo "GPU ready after ${i}s"
-      break
-    fi
-    sleep 1
-  done
+echo ">>> Loading patched nvidia module from $BUNDLE_DIR"
+if [ -d "$FW_ROOT" ]; then
+  echo "$FW_ROOT" > /sys/module/firmware_class/parameters/path
 fi
+
+insmod "$BUNDLE_DIR/nvidia.ko" \
+  NVreg_OpenRmEnableUnsupportedGpus=1 \
+  NVreg_RegistryDwords="RmConfidentialCompute=1"
+INSMOD_RC=$?
+echo "insmod RC=$INSMOD_RC"
+
+if [ "$INSMOD_RC" -ne 0 ]; then
+  echo "ERROR: insmod of patched nvidia.ko failed (RC=$INSMOD_RC)."
+  echo "  Likely vermagic mismatch (bundle built for a different kernel ABI)"
+  echo "  or signature rejected. Bundle modinfo:"
+  /sbin/modinfo "$BUNDLE_DIR/nvidia.ko" 2>&1 | grep -E '^(vermagic|version|sig_id)' || true
+  echo "  Running kernel: $KVER"
+  echo "  Re-tag cvm-images nvidia-cc-v* against the matching kernel-v* release."
+  write_status insmod-fail
+  exit 1
+fi
+
+# Wait for GPU FSP initialisation.
+for i in $(seq 1 30); do
+  if grep -q nvidia-frontend /proc/devices 2>/dev/null; then
+    echo "GPU ready after ${i}s"
+    break
+  fi
+  sleep 1
+done
 
 # ── 5. Device nodes + UVM ───────────────────────────────────────────────
 if [ "$INSMOD_RC" -eq 0 ]; then
@@ -198,45 +197,16 @@ fi
 # without rebuilding the image.
 #
 # The 3-step delegation:
-#   containerd  ->  /usr/sbin/runc  (bind-mounted to /data/runc-nvidia)
+#   containerd  ->  /usr/sbin/runc  (bind-mounted to runc-nvidia wrapper)
 #                ->  /usr/bin/nvidia-container-runtime
-#                ->  /data/runc-real (the actual runc binary, copied
-#                                     before the bind-mount)
-NVCONFIG=/data/nvidia-config.toml
-RUNC_NVIDIA=/data/runc-nvidia
-RUNC_REAL=/data/runc-real
-
-if [ -e /usr/sbin/runc ] && [ ! -f "$RUNC_REAL" ]; then
-  cp /usr/sbin/runc "$RUNC_REAL"
-fi
-
-if [ ! -f "$RUNC_NVIDIA" ]; then
-  cat > "$RUNC_NVIDIA" <<'WRAP'
-#!/bin/sh
-exec /usr/bin/nvidia-container-runtime "$@"
-WRAP
-  chmod +x "$RUNC_NVIDIA"
-fi
-
-if [ ! -f "$NVCONFIG" ]; then
-  cat > "$NVCONFIG" <<EOF
-disable-require = true
-supported-driver-capabilities = "compat32,compute,display,graphics,ngx,utility,video"
-
-[nvidia-container-cli]
-environment = []
-ldconfig = "@/sbin/ldconfig.real"
-load-kmods = true
-
-[nvidia-container-runtime]
-log-level = "info"
-mode = "legacy"
-runtimes = ["${RUNC_REAL}", "crun"]
-
-[nvidia-container-runtime.modes.legacy]
-cuda-compat-mode = "ldconfig"
-EOF
-fi
+#                ->  /usr/sbin/runc.real (the real runc, baked into the
+#                                          image at build time)
+# Both the wrapper and the toml config live in /usr/lib/nvidia-cc/runtime/
+# (read-only erofs) and are bind-mounted over /usr/sbin/runc and
+# /etc/nvidia-container-runtime/config.toml from there. /data carries no
+# code or runtime configuration.
+NVCONFIG=/usr/lib/nvidia-cc/runtime/nvidia-config.toml
+RUNC_NVIDIA=/usr/lib/nvidia-cc/runtime/runc-nvidia
 
 echo ">>> Bind-mounting nvidia runtime overrides"
 mountpoint -q /usr/sbin/runc 2>/dev/null \

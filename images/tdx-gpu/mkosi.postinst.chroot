@@ -1,0 +1,18 @@
+#!/bin/bash
+# mkosi.postinst.chroot
+#
+# Runs inside the image rootfs after package installation, before
+# squashfs/erofs sealing. Used here to create a frozen copy of runc as
+# /usr/sbin/runc.real so cvm-runtime-init.sh can bind-mount the
+# nvidia-container-runtime wrapper over /usr/sbin/runc without losing
+# the real binary (containerd would otherwise recurse forever).
+#
+# Doing the copy here (vs. at boot) means runc.real is part of the
+# erofs+verity-measured rootfs and the bind-mount target chain is
+# fully attested.
+
+set -euo pipefail
+
+if [ -f /usr/sbin/runc ] && [ ! -e /usr/sbin/runc.real ]; then
+    cp -a /usr/sbin/runc /usr/sbin/runc.real
+fi

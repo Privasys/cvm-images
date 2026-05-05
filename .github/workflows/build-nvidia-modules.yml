@@ -2,7 +2,16 @@ name: Build NVIDIA CC Modules
 
 on:
   push:
-    tags: ['nvidia-cc-v*']
+    tags:
+      # Cut a versioned NVIDIA CC bundle release explicitly.
+      - 'nvidia-cc-v*'
+      # Lock-step with kernel ABI: every kernel-v* tag also rebuilds the
+      # patched NVIDIA modules against THAT kernel and uploads the bundle
+      # as a workflow artefact (no GitHub Release is cut for kernel-v*
+      # triggers, only for explicit nvidia-cc-v* tags). The downstream
+      # enclave-os-virtual image build picks up the artefact by kernel ABI,
+      # so a kernel bump can never desync from the driver build.
+      - 'kernel-v*'
   workflow_dispatch:
     inputs:
       kernel_tag:
@@ -39,6 +48,20 @@ jobs:
           set -euo pipefail
           if [ -n "${KERNEL_TAG_INPUT:-}" ]; then
             KERNEL_TAG="$KERNEL_TAG_INPUT"
+          elif [[ "${{ github.ref }}" == refs/tags/kernel-v* ]]; then
+            # Lock-step rebuild: build against the kernel tag we were
+            # triggered by. The kernel-v* release is published by the
+            # build-kernel.yml workflow that runs concurrently; wait until
+            # its assets are up.
+            KERNEL_TAG="${{ github.ref_name }}"
+            echo "Waiting for kernel release $KERNEL_TAG assets to be published"
+            for i in $(seq 1 60); do
+              if gh release view "$KERNEL_TAG" --repo "${{ github.repository }}" \
+                  --json assets -q '.assets[].name' 2>/dev/null | grep -q linux-headers-; then
+                break
+              fi
+              sleep 30
+            done
           else
             KERNEL_TAG=$(gh release list --repo "${{ github.repository }}" \
               --json tagName -q '.[].tagName' | grep '^kernel-v' | head -1)
@@ -54,14 +77,14 @@ jobs:
             --dir /tmp/kernel-debs
           ls -lh /tmp/kernel-debs/
           # The per-flavor linux-headers-$KVER-generic.deb is just the
-          # arch-specific overlay; it depends on linux-hwe-6.17-headers-$KVER
+          # arch-specific overlay; it depends on linux-hwe-<series>-headers-$KVER
           # (the flavor-independent base headers) which is published in the
           # Ubuntu archive (build-kernel.sh in cvm-images doesn't currently
           # ship it; the upstream package satisfies the dep cleanly because
           # our BadAML patch only touches drivers/acpi/, not include/).
           KVER=$(basename /tmp/kernel-debs/linux-headers-*.deb | sed 's/^linux-headers-//; s/_.*//' | head -1)
           KABI="${KVER%-generic}"
-          # Series is major.minor only (e.g. 6.17), not 6.17.0
+          # Series is major.minor only (e.g. 7.0), not 7.0.3
           KSERIES=$(echo "$KABI" | cut -d. -f1-2)
           BASE_PKG="linux-hwe-${KSERIES}-headers-${KABI}"
           echo "Installing base headers package $BASE_PKG from Ubuntu archive"
@@ -96,6 +119,10 @@ jobs:
             nvidia-cc-bundle/BUILD-INFO
           retention-days: 90
 
+      # Only cut a GitHub Release on explicit nvidia-cc-v* tags.
+      # Lock-step kernel-v* runs leave the bundle as a 90-day artefact
+      # consumed by the enclave-os-virtual image build that pins the
+      # same kernel.
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/nvidia-cc-v')
         uses: softprops/action-gh-release@v2

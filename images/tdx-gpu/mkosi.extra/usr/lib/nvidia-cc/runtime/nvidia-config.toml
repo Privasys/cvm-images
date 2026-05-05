@@ -1,0 +1,24 @@
+# nvidia-container-runtime config, bind-mounted over
+# /etc/nvidia-container-runtime/config.toml by cvm-runtime-init.sh.
+#
+# mode = "legacy" is mandatory: the default mode = "auto" silently
+# rewrites NVIDIA_VISIBLE_DEVICES=all to "void" when CDI lookup fails
+# (which it does intermittently on a CC-mode H100 in TDX), making
+# every GPU container come up GPU-less. legacy mode bypasses CDI and
+# uses the nvidia-container-cli code path which is what we actually
+# tested.
+disable-require = true
+supported-driver-capabilities = "compat32,compute,display,graphics,ngx,utility,video"
+
+[nvidia-container-cli]
+environment = []
+ldconfig = "@/sbin/ldconfig.real"
+load-kmods = true
+
+[nvidia-container-runtime]
+log-level = "info"
+mode = "legacy"
+runtimes = ["/usr/sbin/runc.real", "crun"]
+
+[nvidia-container-runtime.modes.legacy]
+cuda-compat-mode = "ldconfig"

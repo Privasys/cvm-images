@@ -297,7 +297,7 @@ The entire pipeline from patch to deployment runs through code we own and CI we 
 
 - **Why erofs?** Read-only by design, smaller than ext4, ideal for dm-verity. No accidental writes possible.
 - **Why GRUB instead of UKI?** Cloud TDX firmware (TDVF) enforces Secure Boot, which silently rejects unsigned EFI binaries including systemd-boot and unsigned UKIs. GRUB is the proven boot chain for TDX and SEV-SNP on cloud platforms. The TEE hardware still measures the full boot chain regardless of the bootloader used.
-- **Why `linux-image-generic-hwe-24.04`?** The HWE (Hardware Enablement) kernel tracks the latest LTS-backported kernel on Noble, currently 6.19. TDX and SEV guest support has been upstream since 6.7.
+- **Why `linux-image-generic-hwe-24.04`?** The HWE (Hardware Enablement) kernel tracks the latest LTS-backported kernel on Noble, currently **7.0.3**. TDX and SEV guest support has been upstream since 6.7.
 - **Why mkosi.extra symlinks instead of mkosi.postinst?** With erofs, the filesystem is already read-only when postinst runs. `systemctl enable` writes symlinks to `/etc`, which fails on a read-only filesystem.
 - **Why `Repositories=universe`?** Required for packages like `clevis` that aren't in Ubuntu's `main` repository.
 - **Why `CopyFiles=/:/` in the root partition config?** erofs requires explicit file population - without this directive, the root partition is empty.
