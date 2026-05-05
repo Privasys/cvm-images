@@ -18,7 +18,7 @@
 #
 # Usage:
 #   ./build-nvidia-modules.sh [--output-dir /path/to/output]
-#   ./build-nvidia-modules.sh --kernel-version 7.0.3-1-generic
+#   ./build-nvidia-modules.sh --kernel-version 6.17.0-23-generic
 
 set -euo pipefail
 

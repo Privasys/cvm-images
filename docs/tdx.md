@@ -93,5 +93,5 @@ When deployed through [Enclave OS Virtual](https://docs.privasys.org/solutions/e
 ## TDX-specific design decisions
 
 - **Why GRUB instead of UKI?** GCP's TDX firmware (TDVF) enforces Secure Boot, which silently rejects unsigned EFI binaries including systemd-boot and unsigned UKIs. GRUB is the proven boot chain for TDX on GCP and other cloud platforms. TDX still measures the full boot chain (kernel, initrd, cmdline) into RTMR registers regardless of the bootloader used.
-- **Why `linux-image-generic-hwe-24.04`?** The HWE (Hardware Enablement) kernel tracks the latest LTS-backported kernel on Noble, currently **7.0.3**. TDX guest support has been upstream since 6.7, so this works on any TDX-capable cloud or bare-metal platform.
+- **Why `linux-image-generic-hwe-24.04`?** The HWE (Hardware Enablement) kernel tracks the latest LTS-backported kernel on Noble, currently the **6.17 series**. TDX guest support has been upstream since 6.7, so this works on any TDX-capable cloud or bare-metal platform.
 - **MRTD is fixed at VM creation.** The MRTD value depends on the OVMF/TDVF firmware provided by the cloud platform (or installed via canonical/tdx on bare metal). You cannot control this value from the guest image. Verification policies should match MRTD against the known firmware version.
