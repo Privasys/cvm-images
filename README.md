@@ -73,7 +73,8 @@ Every byte of code that executes on the machine is either measured by TEE hardwa
 | Integrity | dm-verity hash tree |
 | Boot | Signed shim (Microsoft) → signed GRUB (Canonical) → kernel + initrd + dm-verity roothash in cmdline |
 | Secure Boot | Enabled — full chain from UEFI firmware through bootloader to kernel |
-| Partitions | ESP (512 MB) + root erofs (~940 MB) + verity hash (~63 MB) |
+| Partitions | ESP (512 MB) + root erofs (~940 MB) + verity hash (~63 MB) + (GPU images only) 2 GB `data` placeholder |
+| Persistent data | **Not on the boot disk.** Provided by a separate cloud persistent disk attached as `device-name=data` at deploy time, formatted LUKS2+AEAD by [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/). Survives image upgrades and Spot preemption. |
 | Networking | systemd-networkd with DHCP |
 | SSH | openssh-server (password auth disabled) |
 | Attestation support | tpm2-tools, clevis, cryptsetup |
@@ -219,7 +220,7 @@ images/
     mkosi.pkgmanager/         # NVIDIA/CUDA apt repos + GPG keys + driver pinning
     mkosi.prepare             # Fix stray depmod directory from nvidia-kernel-source
     mkosi.postinst.chroot     # vmlinuz symlink, signed GRUB, vfat cleanup
-    mkosi.repart/             # Includes 500G data partition for model weights
+    mkosi.repart/             # 2 GB on-disk `data` placeholder; real persistent data lives on a dedicated cloud PD attached at deploy time
   sev-snp-base/               # AMD SEV-SNP base image
     mkosi.conf
     mkosi.conf.d/boot.conf    # SEV kernel command line (mem_encrypt=on)
@@ -231,7 +232,7 @@ images/
     mkosi.extra/              # NVIDIA service enables
     mkosi.profiles/gcp/       # GCP profile
     mkosi.prepare             # Adds NVIDIA apt repos
-    mkosi.repart/             # Includes 500G data partition for models
+    mkosi.repart/             # 2 GB on-disk `data` placeholder; real persistent data lives on a dedicated cloud PD attached at deploy time
 common/
   mkosi.extra/                # Shared cloud-agnostic overlay files
     etc/
@@ -268,9 +269,9 @@ The rootfs is read-only — `apt install` on a running VM is impossible. To upda
 2. `cd images/<name> && sudo mkosi build`
 3. Test locally with QEMU
 4. Upload and register the new image on your cloud platform
-5. Create new VM, attach existing data disk, delete old VM
+5. Create a new VM from the image, **re-attach the existing `data` PD**, delete the old VM
 
-The data partition (LUKS-encrypted, separate persistent disk) survives image updates.
+The `data` PD is a **separate cloud persistent disk** (attached as `device-name=data`), not a partition on the boot disk. The boot disk carries only ESP + erofs root + verity hash (and, for GPU images, a 2 GB on-disk `data` placeholder kept for legacy / first-boot bootstrap). All operator state — CA cert/key, manager configuration, container volumes, model weights — lives on the separate PD, formatted LUKS2+AEAD by [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/) on first attach. This decouples image lifecycle from data lifecycle: a new measurement (new dm-verity root hash) does not require migrating data, and Spot preemption never destroys it.
 
 ## Deploying workloads
 
