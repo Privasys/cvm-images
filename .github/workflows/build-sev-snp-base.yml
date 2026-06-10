@@ -27,13 +27,17 @@ jobs:
           - variant: gcp
             mkosi_args: '--profile gcp'
             name_suffix: '-gcp'
+          - variant: gcp-dev
+            mkosi_args: '--profile gcp --profile dev'
+            name_suffix: '-gcp-dev'
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Install mkosi
         run: |
-          sudo pip3 install git+https://github.com/systemd/mkosi.git@v26 --break-system-packages
+          # Pinned to the v26 tag commit (tags are mutable, SHAs are not).
+          sudo pip3 install git+https://github.com/systemd/mkosi.git@84af20892b61c8e177e391f997ded8b4cb5514f2 --break-system-packages
 
       - name: Install build dependencies
         run: |
@@ -76,22 +80,46 @@ jobs:
 
       - name: Verify partitions
         run: |
-          RAW=$(ls images/sev-snp-base/privasys-sev-snp-base_*.raw)
+          RAW=$(ls images/sev-snp-base/privasys-sev-snp-base*_*.raw)
           sudo fdisk -l "$RAW"
           echo "---"
           ls -lh "$RAW"
 
+      - name: Verify production image has no SSH daemon
+        if: matrix.variant != 'gcp-dev'
+        run: |
+          # The production image must not contain an interactive entry
+          # point. Fail the build if sshd slipped in via a dependency.
+          # Userspace check (dump.erofs) - no erofs kernel module needed.
+          RAW=$(ls images/sev-snp-base/privasys-sev-snp-base*_*.raw)
+          ROOT_GUID=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709
+          read -r START SIZE <<< "$(sudo sfdisk --json "$RAW" \
+            | jq -r --arg t "$ROOT_GUID" \
+              '.partitiontable.partitions[] | select(.type==($t|ascii_upcase)) | "\(.start) \(.size)"' \
+            | head -1)"
+          sudo dd if="$RAW" of=/tmp/root.img bs=512 skip="$START" count="$SIZE" status=none
+          if dump.erofs --ls --path=/usr/sbin /tmp/root.img | grep -qw sshd; then
+            echo "::error::sshd found in production image"
+            exit 1
+          fi
+          rm -f /tmp/root.img
+          echo "OK: no sshd in production image"
+
       - name: Package image
         if: startsWith(github.ref, 'refs/tags/sev-snp-base-v')
         run: |
-          cp images/sev-snp-base/privasys-sev-snp-base_*.raw disk.raw
-          tar -czf privasys-sev-snp-base${{ matrix.name_suffix }}-${{ github.ref_name }}.tar.gz disk.raw
+          cp images/sev-snp-base/privasys-sev-snp-base*_*.raw disk.raw
+          OUT=privasys-sev-snp-base${{ matrix.name_suffix }}-${{ github.ref_name }}.tar.gz
+          tar -czf "$OUT" disk.raw
           rm disk.raw
+          sha256sum "$OUT" > "$OUT.sha256"
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/sev-snp-base-v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          files: privasys-sev-snp-base${{ matrix.name_suffix }}-*.tar.gz
+          files: |
+            privasys-sev-snp-base${{ matrix.name_suffix }}-*.tar.gz
+            privasys-sev-snp-base${{ matrix.name_suffix }}-*.tar.gz.sha256
           generate_release_notes: true
           make_latest: false
