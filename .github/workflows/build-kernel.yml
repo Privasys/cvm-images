@@ -10,11 +10,11 @@ permissions:
 
 jobs:
   build:
-    name: Build CVM guard kernel
+    name: Build CVM guard kernel + signed NVIDIA CC modules
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Free disk space
         run: |
@@ -24,22 +24,101 @@ jobs:
 
       - name: Build patched kernel
         run: |
-          sudo ./build-kernel.sh "${{ github.workspace }}/debs"
+          # SIGNING_DIR exports the build's ephemeral module signing key so
+          # the NVIDIA CC modules can be signed in this same job. The key
+          # is destroyed before the job ends and never uploaded.
+          sudo SIGNING_DIR="${{ runner.temp }}/signing" \
+            ./build-kernel.sh "${{ github.workspace }}/debs"
           echo "### Kernel .deb packages" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           ls -lh debs/*.deb >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload kernel .debs
-        uses: actions/upload-artifact@v4
+      - name: Install built kernel headers
+        run: |
+          # The NVIDIA CC modules must be built against the kernel we just
+          # produced. The per-flavor linux-headers-<abi>-generic.deb depends
+          # on the flavor-independent linux-hwe-<series>-headers base, which
+          # comes from the Ubuntu archive (the BadAML patch only touches
+          # drivers/acpi/, not include/, so the upstream base satisfies the
+          # dependency cleanly).
+          set -euo pipefail
+          KVER=$(basename debs/linux-headers-*.deb | sed 's/^linux-headers-//; s/_.*//' | head -1)
+          KABI="${KVER%-generic}"
+          KSERIES=$(echo "$KABI" | cut -d. -f1-2)
+          BASE_PKG="linux-hwe-${KSERIES}-headers-${KABI}"
+          echo "Installing base headers package $BASE_PKG from Ubuntu archive"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends "$BASE_PKG"
+          sudo dpkg -i debs/linux-headers-*.deb
+          ls -d /usr/src/linux-headers-"$KVER" || { echo "::error::headers tree missing"; exit 1; }
+          echo "KVER=$KVER" >> "$GITHUB_ENV"
+
+      - name: Build NVIDIA CC modules against this kernel
+        run: |
+          set -euo pipefail
+          sudo -E ./build-nvidia-modules.sh \
+            --kernel-version "$KVER" \
+            --output-dir "${{ github.workspace }}/nvidia-cc-bundle"
+
+      - name: Sign NVIDIA CC modules with the kernel's build key
+        run: |
+          # Sign with the same ephemeral key whose certificate the kernel
+          # build embedded in its builtin trusted keyring. This makes the
+          # patched modules loadable under module.sig_enforce=1 and
+          # lockdown=integrity. Ubuntu kernels use sha512 module signatures
+          # (CONFIG_MODULE_SIG_SHA512).
+          set -euo pipefail
+          S="${{ runner.temp }}/signing"
+          test -f "$S/signing_key.pem" || { echo "::error::signing key missing"; exit 1; }
+          for ko in nvidia-cc-bundle/modules/*.ko; do
+            sudo "$S/sign-file" sha512 "$S/signing_key.pem" "$S/signing_key.x509" "$ko"
+            tail -c 100 "$ko" | grep -q "Module signature appended" \
+              || { echo "::error::signature missing on $ko"; exit 1; }
+            echo "signed: $ko"
+          done
+          # Ship the PUBLIC certificate in the bundle for transparency /
+          # offline verification. The private key never leaves this job.
+          sudo cp "$S/signing_key.x509" nvidia-cc-bundle/module-signing-cert.x509
+          echo "signed=true" >> nvidia-cc-bundle/BUILD-INFO
+
+      - name: Destroy ephemeral signing key
+        if: always()
+        run: |
+          sudo shred -u "${{ runner.temp }}/signing/signing_key.pem" 2>/dev/null || true
+          sudo rm -rf "${{ runner.temp }}/signing"
+
+      - name: Package signed bundle
+        run: |
+          set -euo pipefail
+          source <(grep -E '^(nvidia_version|kernel_version)=' nvidia-cc-bundle/BUILD-INFO)
+          TAR="nvidia-cc-bundle-signed-${nvidia_version}-${kernel_version}.tar.gz"
+          tar -czf "$TAR" nvidia-cc-bundle
+          sha256sum debs/*.deb "$TAR" > SHA256SUMS
+          {
+            echo "### Signed NVIDIA CC bundle"
+            echo '```'
+            cat nvidia-cc-bundle/BUILD-INFO
+            ls -lh nvidia-cc-bundle/modules/*.ko
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload kernel .debs + signed bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: kernel-debs
-          path: debs/*.deb
+          path: |
+            debs/*.deb
+            nvidia-cc-bundle-signed-*.tar.gz
+            SHA256SUMS
           retention-days: 90
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/kernel-v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          files: debs/*.deb
+          files: |
+            debs/*.deb
+            nvidia-cc-bundle-signed-*.tar.gz
+            SHA256SUMS
           generate_release_notes: true

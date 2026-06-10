@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Free disk space
         run: |
@@ -110,8 +110,13 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # NOTE: bundles produced by this workflow are UNSIGNED (the ephemeral
+      # kernel signing key only exists inside the build-kernel.yml job).
+      # Signed bundles are attached to the kernel-v* releases by that
+      # workflow. Unsigned bundles only load on kernels booted without
+      # module.sig_enforce=1.
       - name: Upload bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nvidia-cc-bundle
           path: |
@@ -125,7 +130,7 @@ jobs:
       # same kernel.
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/nvidia-cc-v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: nvidia-cc-bundle*.tar.gz
           generate_release_notes: true

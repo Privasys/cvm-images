@@ -198,6 +198,36 @@ else
     tail -10 "$KBUILD_LOG"
 fi
 
+# ── Step 5.5: Export ephemeral module signing material ──
+# The Ubuntu kernel build generates a one-off module signing key
+# (CONFIG_MODULE_SIG_KEY=certs/signing_key.pem) and embeds its certificate
+# in the kernel's builtin trusted keyring. Out-of-tree modules (the NVIDIA
+# CC bundle) must be signed with this same key to load under
+# module.sig_enforce=1 / lockdown=integrity.
+#
+# The exported private key is only meaningful for THIS kernel build: CI
+# uses it to sign the NVIDIA CC modules in the same workflow run, then
+# destroys it. It must never be published or persisted.
+if [ -n "${SIGNING_DIR:-}" ]; then
+    echo ""
+    echo "=== Exporting module signing material to $SIGNING_DIR ==="
+    mkdir -p "$SIGNING_DIR"
+    SIGN_KEY=$(find "$SRC_DIR/debian/build" -path "*certs/signing_key.pem" 2>/dev/null | head -1)
+    SIGN_X509=$(find "$SRC_DIR/debian/build" -path "*certs/signing_key.x509" 2>/dev/null | head -1)
+    SIGN_FILE=$(find "$SRC_DIR/debian/build" -name sign-file -type f 2>/dev/null | head -1)
+    if [ -n "$SIGN_KEY" ] && [ -n "$SIGN_X509" ] && [ -n "$SIGN_FILE" ]; then
+        cp "$SIGN_KEY" "$SIGNING_DIR/signing_key.pem"
+        cp "$SIGN_X509" "$SIGNING_DIR/signing_key.x509"
+        cp "$SIGN_FILE" "$SIGNING_DIR/sign-file"
+        chmod 600 "$SIGNING_DIR/signing_key.pem"
+        chmod +x "$SIGNING_DIR/sign-file"
+        echo "Exported: signing_key.pem (private, ephemeral), signing_key.x509, sign-file"
+    else
+        echo "WARNING: module signing material not found in $SRC_DIR/debian/build"
+        echo "  key=$SIGN_KEY x509=$SIGN_X509 sign-file=$SIGN_FILE"
+    fi
+fi
+
 # ── Step 6: Collect .debs ──
 echo ""
 echo "=== Collecting output ==="
