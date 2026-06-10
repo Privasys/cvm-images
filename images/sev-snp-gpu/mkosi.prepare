@@ -1,0 +1,13 @@
+#!/bin/bash
+set -eu
+
+# nvidia-kernel-source-595-server-open creates a stray /usr/lib/modules/kernel/
+# directory during package installation.  mkosi's run_depmod() iterates all
+# directories under /usr/lib/modules/ and runs "depmod --all <dirname>" for
+# each one, so "kernel" is passed as a version string and depmod fails with
+# "Bad version passed kernel".
+#
+# PrepareScripts run AFTER package installation but BEFORE run_depmod(),
+# which is exactly the right hook point.  RemoveFiles= runs too late (after
+# depmod) so it cannot fix this.
+rm -rf "$BUILDROOT/usr/lib/modules/kernel"

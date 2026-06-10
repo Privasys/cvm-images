@@ -6,6 +6,20 @@ Package: nsight-systems
 Pin: origin *ubuntu.com*
 Pin-Priority: -1
 
-Package: *
+# Only prefer the NVIDIA CUDA repo for CUDA toolkit and container runtime
+# packages.  nvidia-driver-* must come from Ubuntu's restricted repo so
+# that pre-built, Canonical-signed kernel modules are used instead of
+# DKMS-built unsigned modules.
+Package: cuda-* libcublas-* libcufft-* libcurand-* libcusolver-* libcusparse-* libnpp-* nvidia-container-toolkit* libnvidia-container*
 Pin: release l=NVIDIA CUDA
 Pin-Priority: 600
+
+# Block nvidia driver/lib packages from the CUDA repo.  These exist in
+# BOTH the CUDA repo and Ubuntu's restricted repo with incompatible
+# versions.  The pre-built Canonical-signed kernel modules
+# (linux-modules-nvidia-595-server-open-generic) require the Ubuntu
+# versions.  CUDA-only libraries (libcufile-*, libnvjitlink-*, etc.)
+# are NOT affected by this block.
+Package: nvidia-* libnvidia-* xserver-xorg-video-nvidia-*
+Pin: release l=NVIDIA CUDA
+Pin-Priority: -1
