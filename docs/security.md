@@ -10,7 +10,7 @@ These images are the base OS layer used by [Enclave OS Virtual](https://docs.pri
 
 **Integrity.** Every byte of code that executes is either measured by TEE hardware or verified by dm-verity. The root filesystem is read-only (erofs) and any modification causes an I/O error and kernel panic. Kernel lockdown prevents unsigned code from running in ring 0.
 
-**Verifiability.** A remote party can cryptographically verify exactly what code is running inside the VM by checking TEE attestation reports against known-good measurement values. The image is built from source in this repository, producing a deterministic dm-verity root hash. Enclave OS Virtual extends this further with configuration attestation, where additional X.509 extensions prove the complete runtime configuration, not just the code identity.
+**Verifiability.** A remote party can cryptographically verify exactly what code is running inside the VM by checking TEE attestation reports against known-good measurement values. The image is built from source in this repository; the dm-verity root hash uniquely identifies the rootfs of a given build. (Bit-for-bit reproducible rebuilds are not yet achieved — see [Image integrity, known limitations](image-integrity.md#known-limitations).) Enclave OS Virtual extends this further with configuration attestation, where additional X.509 extensions prove the complete runtime configuration, not just the code identity.
 
 **Isolation.** The TEE hardware isolates the VM from the hypervisor, the cloud provider, and other tenants. The cloud operator has no access to the guest's memory, registers, or disk encryption keys.
 
@@ -59,7 +59,7 @@ Every layer verifies the next. There are no gaps where unverified code can execu
 | **Malicious co-tenant** | Another cloud tenant on the same physical host | May attempt VM escape, side-channel attacks, or network interception on shared infrastructure. |
 | **Compromised host OS** | Hypervisor or host kernel with a vulnerability or implant | Full control over VM lifecycle, virtual devices, disk I/O, and network. Cannot read TEE-protected memory. |
 | **Network attacker** | Adversary with access to the network path between VMs or between a VM and external services | Can intercept, modify, replay, or drop network traffic. |
-| **Malicious operator** | DevOps engineer or administrator with SSH access or deployment credentials | Can attempt to modify the running system, install software, exfiltrate data, or deploy unauthorized workloads. |
+| **Malicious operator** | DevOps engineer or administrator with deployment credentials | Can attempt to modify the running system, install software, exfiltrate data, or deploy unauthorized workloads. Production images contain **no SSH daemon and no interactive entry point** — the only management path is the attested Enclave OS Virtual API. Dev images (built with `--profile dev`) do include SSH, and have a different `ImageId` and different measurements, so a remote verifier can always tell them apart from production. |
 
 ### What we do NOT protect against
 
@@ -90,8 +90,8 @@ When a remote verifier checks the TEE attestation report and confirms the measur
 2. **The firmware is unmodified.** The firmware measurement (MRTD / launch digest) matches the expected OVMF/TDVF build.
 3. **The boot chain is intact.** Secure Boot verified every stage. The kernel, initrd, and command line (including dm-verity root hash) are measured into RTMR/PCR registers.
 4. **The root filesystem is exactly the one built from this repository.** The dm-verity root hash is part of the measured kernel command line. Any modification to any file on the rootfs will cause a verification failure.
-5. **No unsigned code runs in kernel space.** Kernel lockdown and module signature enforcement prevent loading arbitrary kernel modules.
-6. **The CVM Guard kernel patch is active.** ACPI bytecode cannot access TEE-private memory, closing the firmware-level attack vector documented in BadAML research.
+5. **No unsigned code runs in kernel space.** Kernel lockdown and module signature enforcement prevent loading arbitrary kernel modules. *Current exception:* the `tdx-gpu` image boots without these two flags because its runtime-loaded patched NVIDIA CC modules are not yet signed with a kernel-trusted key (see [tdx-gpu boot.conf](../images/tdx-gpu/mkosi.conf.d/boot.conf)). Signed bundles now ship with `kernel-v*` releases and the flags will be restored in the next `tdx-gpu` release.
+6. **The CVM Guard kernel patch is active** — on images built with the patched `kernel-v*` kernel (all Enclave OS Virtual production builds). ACPI bytecode cannot access TEE-private memory, closing the firmware-level attack vector documented in BadAML research. The standalone base images published here currently ship Canonical's stock signed kernel (which boots under UEFI Secure Boot); the patched kernel is unsigned and relies on TEE measured boot instead.
 
 When using [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/), additional guarantees are provided through RA-TLS configuration attestation: the exact set of loaded containers, their digests, and the runtime configuration are all embedded in the server certificate's X.509 extensions and verified during the TLS handshake.
 
@@ -105,11 +105,11 @@ These images have the smallest attack surface: ~40 Ubuntu packages, no GUI, no p
 
 The GPU images include additional packages for NVIDIA Confidential Computing:
 
-- **nvidia-driver-550-server**: The NVIDIA kernel module is signed by NVIDIA and Canonical for Ubuntu. It runs in kernel space and is part of the TCB.
-- **CUDA toolkit**: Runs in userspace. Large attack surface (~5 GB) but does not have kernel-level access.
+- **NVIDIA 595 server-open kernel modules** (`linux-modules-nvidia-595-server-open-*`): pre-built and Canonical-signed. The open kernel modules are required for CC mode on datacenter GPUs. They run in kernel space and are part of the TCB.
+- **Minimal NVIDIA userspace**: only `nvidia-smi` (nvidia-utils) and the CUDA driver libraries (`libnvidia-compute`: libcuda, libnvidia-ml). There is **no CUDA toolkit on the host** — inference runtimes (vLLM) ship their own CUDA runtime inside the workload container, keeping the host TCB small.
 - **Confidential Computing mode**: Enabled via `nvidia.NVreg_ConfidentialComputing=1`. The GPU encrypts data in transit between CPU and GPU memory over the PCIe bus. The GPU has its own attestation capability (NVIDIA NRAS) for verifying the GPU firmware.
 - **Larger TCB**: The GPU images have a significantly larger trusted computing base than the non-GPU images. This is an inherent trade-off of confidential AI inference.
-- **Data partition**: A 500 GB data partition is included for model weights (supporting multiple models via vLLM). This partition is encrypted with LUKS, with the key derived from TEE attestation.
+- **Data**: the boot disk carries only a 2 GB `data` placeholder partition. Model weights and operator state live on a **separate cloud persistent disk** attached at deploy time and formatted LUKS2+AEAD by Enclave OS Virtual, with the key bound to TEE attestation. See [Encrypted storage](encrypted-storage.md).
 
 ## Further reading
 

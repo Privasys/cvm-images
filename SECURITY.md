@@ -3,11 +3,11 @@
 ## Reporting a Vulnerability
 
 We take security seriously at Privasys. If you discover a vulnerability
-in tdx-image-base, please report it responsibly through one of the
+in cvm-images, please report it responsibly through one of the
 following channels:
 
 - **Email:** [security@privasys.org](mailto:security@privasys.org)
-- **GitHub:** Open a [private security advisory](https://github.com/Privasys/tdx-image-base/security/advisories/new)
+- **GitHub:** Open a [private security advisory](https://github.com/Privasys/cvm-images/security/advisories/new)
 
 Please include:
 

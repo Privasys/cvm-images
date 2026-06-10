@@ -8,3 +8,6 @@ mkosi.cache/
 mkosi.builddir/
 mkosi.output/
 mkosi.workspace/
+
+# local CI log dumps
+run*.log

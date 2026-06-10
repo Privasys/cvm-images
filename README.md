@@ -13,13 +13,15 @@ These images are the base OS layer used by [Enclave OS Virtual](https://docs.pri
 | **sev-snp-base** | `images/sev-snp-base/` | AMD SEV-SNP | Base image for SEV-SNP confidential VMs |
 | **sev-snp-gpu** | `images/sev-snp-gpu/` | AMD SEV-SNP + NVIDIA H100 | Confidential AI inference with GPU CC mode |
 
-All images share the same security architecture: erofs root, dm-verity, Secure Boot, kernel lockdown. Shared overlay files live in `common/mkosi.extra/`:
+All images share the same security architecture: erofs root, dm-verity, Secure Boot, kernel lockdown. One scoped exception: `tdx-gpu` currently boots without `lockdown=integrity` / `module.sig_enforce=1` because the patched NVIDIA CC modules it loads at runtime are not yet signed with a kernel-trusted key — see the note in [images/tdx-gpu/mkosi.conf.d/boot.conf](images/tdx-gpu/mkosi.conf.d/boot.conf). Signed module bundles now ship with `kernel-v*` releases; both flags will be restored in the next `tdx-gpu` release that consumes them.
+
+Shared overlay files live in `common/mkosi.extra/`:
 
 | File | Purpose |
 |------|---------|
 | `etc/resolv.conf` | Symlink to systemd-resolved |
 | `etc/nsswitch.conf` | Name service switch (passwd, group, hosts) |
-| `etc/ssh/sshd_config.d/50-hardened.conf` | Disable password auth, restrict root login |
+| `etc/ssh/sshd_config.d/50-hardened.conf` | Disable password auth, restrict root login (only takes effect in `dev` builds — production images contain no SSH daemon) |
 | `etc/sysctl.d/60-apparmor-userns.conf` | Allow container runtime user namespaces |
 | `etc/systemd/network/10-dhcp.network` | DHCP networking on en* interfaces |
 | `etc/tmpfiles.d/readwrite.conf` | Runtime directories on tmpfs |
@@ -31,7 +33,7 @@ Cloud-specific additions (GCP guest agent, OS Login, SSH metadata keys) are appl
 
 GPU images add NVIDIA driver packages, CUDA toolkit, container runtime integration, and kernel command line parameters for Confidential Computing mode.
 
-**Downstream consumers:** [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/) imports from this repository for both base and GPU images. The base image imports `common/mkosi.extra/`, `tdx-base/mkosi.conf.d/boot.conf`, and `tdx-base/mkosi.postinst.chroot`. The GPU image additionally imports from `tdx-gpu/` (NVIDIA repos, prepare scripts, persistenced overlay).
+**Downstream consumers:** [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/) imports from this repository for both base and GPU images. The base image imports `common/mkosi.extra/` and `tdx-base/mkosi.conf.d/boot.conf`. The GPU image additionally imports from `tdx-gpu/` (NVIDIA repos, prepare scripts, persistenced overlay).
 
 The images are cloud-agnostic at their core, a standard GPT disk with a GRUB-booted kernel, erofs root, and dm-verity hash tree. They can run on any capable hypervisor (GCP, Azure, bare-metal QEMU/KVM). See [Deployment guides](#deployment-guides) for platform-specific instructions.
 
@@ -68,7 +70,7 @@ Every byte of code that executes on the machine is either measured by TEE hardwa
 | Component | Details |
 |-----------|---------|
 | Guest OS | Ubuntu 24.04 LTS (Noble Numbat) |
-| Kernel | `linux-image-generic-hwe-24.04` (HWE; auto-tracks latest; TDX + SEV guest support since 6.2) + [CVM Guard patch](patches/) |
+| Kernel | `linux-image-generic-hwe-24.04` (HWE; auto-tracks latest; TDX + SEV guest support since 6.2). The [CVM Guard patch](patches/) (BadAML mitigation) is built separately (`build-kernel.sh`, published as `kernel-v*` releases) and installed by [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/) image builds; the patched kernel is unsigned, so images that use it boot with measured boot (TEE RTMRs) instead of UEFI Secure Boot. |
 | Root filesystem | erofs (read-only) |
 | Integrity | dm-verity hash tree |
 | Boot | Signed shim (Microsoft) → signed GRUB (Canonical) → kernel + initrd + dm-verity roothash in cmdline |
@@ -76,7 +78,7 @@ Every byte of code that executes on the machine is either measured by TEE hardwa
 | Partitions | ESP (512 MB) + root erofs (~940 MB) + verity hash (~63 MB) + (GPU images only) 2 GB `data` placeholder |
 | Persistent data | **Not on the boot disk.** Provided by a separate cloud persistent disk attached as `device-name=data` at deploy time, formatted LUKS2+AEAD by [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/). Survives image upgrades and Spot preemption. |
 | Networking | systemd-networkd with DHCP |
-| SSH | openssh-server (password auth disabled) |
+| SSH | **None in production images.** `--profile dev` adds openssh-server (password auth disabled) plus debugging tools |
 | Attestation support | tpm2-tools, clevis, cryptsetup |
 | Cloud integration | Optional via `--profile gcp` (google-compute-engine, google-guest-agent, OS Login) |
 
@@ -174,12 +176,18 @@ The base images are **cloud-agnostic** - they contain no cloud-provider-specific
 | Profile | Adds | Use case |
 |---------|------|----------|
 | `gcp` | `google-compute-engine`, `google-guest-agent`, `google-compute-engine-oslogin`, GCE SSH key lookup, OS Login nsswitch | Google Cloud Platform |
+| `dev` | `openssh-server`, `openssh-client`, `strace`, `tcpdump`, `curl`, `jq`. Changes `ImageId` to `*-dev` so dev artifacts (and their measurements) are unambiguous | Development and debugging **only** — never production |
 | *(none)* | Nothing extra | Bare metal, QEMU/KVM, OVHcloud, or any other platform |
 
-To build with a profile:
+Production images contain **no SSH daemon and no interactive entry point**: every code path that can execute in a production CVM is measured at build time, and a runtime shell would break that guarantee. Workloads are deployed and managed through [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/) over the attested API. CI enforces this — the production image build fails if `sshd` is present in the rootfs.
+
+To build with profiles:
 
 ```bash
 cd images/tdx-base && sudo mkosi --profile gcp build
+
+# Development build (adds SSH + debug tools, ImageId gets a -dev suffix):
+cd images/tdx-base && sudo mkosi --profile gcp --profile dev build
 ```
 
 Profile files live in `mkosi.profiles/<name>/mkosi.conf` within each image directory. The shared GCP overlay files (SSH metadata key script, OS Login nsswitch, runtime directories) live in `common/mkosi.extra.gcp/`.
@@ -213,7 +221,7 @@ images/
     mkosi.profiles/gcp/       # GCP profile (packages + overlay)
     mkosi.repart/             # Partition layout
   tdx-gpu/                    # Intel TDX + NVIDIA H100
-    mkosi.conf                # Adds NVIDIA 590 open driver, CUDA 13, container toolkit
+    mkosi.conf                # Adds NVIDIA 595 server-open modules + minimal userspace (nvidia-smi, libcuda), container toolkit. No CUDA toolkit: workload containers ship their own CUDA runtime
     mkosi.conf.d/boot.conf    # GPU CC mode (iommu=pt, NVreg_ConfidentialComputing)
     mkosi.extra/              # NVIDIA service enables
     mkosi.profiles/gcp/       # GCP profile
@@ -227,11 +235,11 @@ images/
     mkosi.profiles/gcp/       # GCP profile
     mkosi.repart/
   sev-snp-gpu/                # AMD SEV-SNP + NVIDIA H100
-    mkosi.conf                # Adds NVIDIA driver, CUDA, container toolkit
+    mkosi.conf                # Same NVIDIA 595 server-open stack as tdx-gpu + fabric manager (NVLink)
     mkosi.conf.d/boot.conf    # GPU CC mode (iommu=nopt, NVreg_ConfidentialComputing)
     mkosi.extra/              # NVIDIA service enables
     mkosi.profiles/gcp/       # GCP profile
-    mkosi.prepare             # Adds NVIDIA apt repos
+    mkosi.prepare             # Fix stray depmod directory from nvidia-kernel-source
     mkosi.repart/             # 2 GB on-disk `data` placeholder; real persistent data lives on a dedicated cloud PD attached at deploy time
 common/
   mkosi.extra/                # Shared cloud-agnostic overlay files

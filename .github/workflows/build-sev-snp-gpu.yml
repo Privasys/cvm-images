@@ -24,6 +24,7 @@ jobs:
     name: Build SEV-SNP GPU image (${{ matrix.variant }})
     runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         include:
           - variant: generic
@@ -123,7 +124,7 @@ jobs:
             echo "::error::sshd found in production image"
             exit 1
           fi
-          rm -f /tmp/root.img
+          sudo rm -f /tmp/root.img
           echo "OK: no sshd in production image"
 
       - name: Package image

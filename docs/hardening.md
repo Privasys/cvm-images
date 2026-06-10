@@ -45,14 +45,24 @@ In [RA-TLS](https://docs.privasys.org/technology/attestation/attested-connection
 
 Enclave OS Virtual manages the full RA-TLS lifecycle: certificate generation, quote embedding, renewal, and optional mutual attestation between CVMs. [Client verification libraries](https://docs.privasys.org/solutions/platform/verification-libraries/) are available for Go, Python, Rust, TypeScript, and C#.
 
-### SSH hardening
+### No SSH in production
 
-SSH is configured with hardened defaults (`50-hardened.conf`):
+Production images contain no SSH daemon and no interactive entry point. A
+runtime shell would allow execution of code that was never measured at
+build time, breaking the attestation guarantee — regardless of who holds
+the keys. Workloads are deployed and managed through Enclave OS Virtual
+over the attested API. CI fails the production image build if `sshd` is
+found in the rootfs.
+
+Development builds (`--profile dev`) add openssh with hardened defaults
+(`50-hardened.conf`):
 - Password authentication disabled
 - Only key-based authentication accepted
 - Root login disabled by default
 
-For production deployments through Enclave OS Virtual, SSH can be disabled entirely as workloads are managed through the container orchestration layer.
+Dev builds use a distinct `ImageId` (`*-dev`) and therefore produce
+different measurements — a remote verifier can always distinguish a dev
+image from a production one.
 
 ## Secrets management
 
@@ -118,7 +128,16 @@ The GPU images include the NVIDIA H100 Confidential Computing stack:
 - **GPU attestation.** The GPU has its own attestation mechanism (via NVIDIA's Remote Attestation Service). CPU attestation proves the VM code is correct. GPU attestation proves the GPU firmware is genuine and CC mode is active.
 - **Encrypted GPU memory.** With Confidential Computing mode enabled, the GPU encrypts data in transit between CPU and GPU memory over the PCIe bus.
 - **NVIDIA driver in the TCB.** The kernel module runs in ring 0 with full access to VM memory. NVIDIA signs the driver, and Canonical co-signs it for Ubuntu. This is an inherent trade-off of confidential GPU computing.
-- **500 GB data partition.** Sized for multiple AI models (vLLM). The partition is LUKS-encrypted with a TEE-attested key.
+- **Model storage on a separate encrypted disk.** The boot disk carries only a 2 GB `data` placeholder; model weights live on a dedicated cloud persistent disk attached at deploy time, LUKS-encrypted with a TEE-attested key.
+
+## Accepted trade-offs
+
+Deliberate deviations from defaults, documented so they can be re-evaluated:
+
+- **`kernel.apparmor_restrict_unprivileged_userns=0`** (`common/mkosi.extra/etc/sysctl.d/60-apparmor-userns.conf`). Ubuntu 24.04 restricts unprivileged user namespaces by default; container runtimes need them. Relaxing this widens the container-to-kernel attack surface inside the guest. Accepted because workload containers are operator-deployed and measured into the attestation — there are no untrusted local users. Re-evaluate if multi-tenant workloads ever share one CVM.
+- **`lockdown=integrity` / `module.sig_enforce=1` disabled on `tdx-gpu`** (temporary). The runtime-loaded patched NVIDIA CC modules were unsigned. Signed bundles now ship with `kernel-v*` releases; the flags will be restored in the next `tdx-gpu` release that consumes them.
+- **Runtime PAM adjustment in GPU bring-up** (`cvm-runtime-init.sh` swaps `pam_systemd` for `pam_permit` because logind session setup fails in CVMs). Only relevant to interactive logins, which exist only in dev builds.
+- **World-readable GPU device nodes** (`chmod 666 /dev/nvidia*` in `cvm-runtime-init.sh`). Standard practice for container GPU passthrough; there are no untrusted local users in the guest.
 
 ## Security properties summary
 
@@ -126,7 +145,8 @@ The GPU images include the NVIDIA H100 Confidential Computing stack:
 |---|---|
 | Read-only rootfs | erofs filesystem, dm-verity integrity |
 | No runtime code modification | No package manager, no writable system paths |
-| Kernel integrity | `lockdown=integrity`, `module.sig_enforce=1` |
+| Kernel integrity | `lockdown=integrity`, `module.sig_enforce=1` (temporarily off on `tdx-gpu`, see Accepted trade-offs) |
+| No interactive access | Production images ship no SSH daemon; dev builds are measurably distinct (`-dev` ImageId) |
 | Measured boot chain | Secure Boot + TEE measurement registers (RTMR/PCR) |
 | Memory encryption | TEE hardware (TDX/SEV-SNP) per-VM keys |
 | Disk encryption | LUKS2 with TEE-attested key |
