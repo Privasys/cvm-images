@@ -44,16 +44,31 @@ gcloud compute instances create my-tdx-vm \
     --network-interface=nic-type=GVNIC \
     --maintenance-policy=TERMINATE \
     --create-disk=auto-delete=yes,boot=yes,image=projects/YOUR_PROJECT/global/images/family/privasys-tdx,size=10,type=pd-balanced \
-    --shielded-secure-boot \
+    --no-shielded-secure-boot \
     --shielded-vtpm \
     --shielded-integrity-monitoring \
     --confidential-compute-type=TDX
 ```
 
+**Why `--no-shielded-secure-boot`?** The images use the CVM Guard patched
+kernel, which is not signed by Canonical, so it cannot pass UEFI Secure
+Boot's certificate check. Integrity does not depend on Secure Boot here:
+TDX measures the firmware, bootloader, kernel, initrd, and command line
+(including the dm-verity root hash) into RTMR registers regardless, and a
+tampered boot chain produces different measurements that fail remote
+attestation and receive no secrets. This keeps the images cloud-agnostic —
+the same trust model works on any TDX/SEV-SNP host without depending on a
+cloud provider's or OS vendor's signing keys.
+
 ## Verify
 
+Production images have no SSH daemon — verification happens through
+attestation (RA-TLS via Enclave OS Virtual) or the serial console. For
+interactive inspection, deploy a **dev build** (`--profile gcp --profile
+dev`) instead:
+
 ```bash
-gcloud compute ssh my-tdx-vm
+gcloud compute ssh my-tdx-vm        # dev image only
 
 ls -l /dev/tdx_guest          # TDX device present
 mount | grep verity            # dm-verity on root
@@ -65,5 +80,5 @@ tpm2_pcrread sha256:0,1,2,3,4,5,7,11
 
 - **Machine types:** TDX is available on C3 machines (`c3-standard-*`). Not all zones support TDX — check [GCP Confidential VM docs](https://cloud.google.com/confidential-computing/confidential-vm/docs/os-and-machine-type#machine_type) for availability.
 - **Attestation:** GCP wraps TDX attestation in its [Confidential Computing API](https://cloud.google.com/confidential-computing/confidential-vm/docs/attestation). You can also do raw TDX attestation via `/dev/tdx_guest`.
-- **Guest agent:** The GCP profile (`--profile gcp`) includes `google-compute-engine` and `google-guest-agent` for metadata-based SSH key injection and instance identity.
+- **Guest agent:** The GCP profile (`--profile gcp`) includes `google-guest-agent` for metadata and startup scripts. Metadata-based SSH key injection only exists in dev builds (`--profile gcp --profile dev`); production images have no SSH daemon.
 - **Networking:** GCP uses gVNIC (`--network-interface=nic-type=GVNIC`). The kernel includes the `gve` driver. systemd-networkd handles DHCP automatically.

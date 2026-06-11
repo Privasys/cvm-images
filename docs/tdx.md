@@ -12,14 +12,13 @@ The trust chain for TDX-based images ties every layer of software to the hardwar
 Silicon (TDX SEAM module inside the CPU)
   └─ MRTD - measures the TD firmware (OVMF/TDVF) loaded by the hypervisor
       └─ RTMR[0] - measures the firmware configuration (vCPU count, memory layout)
-          └─ Secure Boot - UEFI verifies shimx64.efi (Microsoft) -> grubx64.efi (Canonical) -> kernel
-              └─ RTMR[1] - measures the EFI boot path: shim and GRUB binaries (CC MR 2)
-                  └─ RTMR[2] - measures OS boot: kernel, initrd, cmdline with dm-verity root hash (CC MR 3)
-                      └─ dm-verity - every block of the rootfs verified against the hash tree
-                          └─ All userland binaries - any modification = I/O error + kernel panic
+          └─ RTMR[1] - measures the EFI boot path: shim and GRUB binaries (CC MR 2)
+              └─ RTMR[2] - measures OS boot: kernel, initrd, cmdline with dm-verity root hash (CC MR 3)
+                  └─ dm-verity - every block of the rootfs verified against the hash tree
+                      └─ All userland binaries - any modification = I/O error + kernel panic
 ```
 
-Every byte of code that executes on the machine is either measured by TDX hardware or verified by dm-verity. No gaps.
+Every byte of code that executes on the machine is either measured by TDX hardware or verified by dm-verity. No gaps. UEFI Secure Boot is intentionally disabled at deploy time (`--no-shielded-secure-boot` on GCP): the CVM Guard patched kernel is not Canonical-signed, and integrity is enforced through these measurements rather than a platform certificate database — a tampered stage changes RTMR values, fails attestation, and gets no secrets.
 
 ## TDX measurement registers
 
@@ -92,6 +91,6 @@ When deployed through [Enclave OS Virtual](https://docs.privasys.org/solutions/e
 
 ## TDX-specific design decisions
 
-- **Why GRUB instead of UKI?** GCP's TDX firmware (TDVF) enforces Secure Boot, which silently rejects unsigned EFI binaries including systemd-boot and unsigned UKIs. GRUB is the proven boot chain for TDX on GCP and other cloud platforms. TDX still measures the full boot chain (kernel, initrd, cmdline) into RTMR registers regardless of the bootloader used.
+- **Why GRUB instead of UKI?** Historical: with Secure Boot enabled, GCP's TDX firmware (TDVF) silently rejected unsigned EFI binaries including systemd-boot and unsigned UKIs, so GRUB's signed chain was the only workable option. Now that VMs deploy with Secure Boot off (measured-boot trust model), a UKI becomes viable and would simplify RTMR measurement prediction. Candidate for a future change.
 - **Why `linux-image-generic-hwe-24.04`?** The HWE (Hardware Enablement) kernel tracks the latest LTS-backported kernel on Noble, currently the **6.17 series**. TDX guest support has been upstream since 6.7, so this works on any TDX-capable cloud or bare-metal platform.
 - **MRTD is fixed at VM creation.** The MRTD value depends on the OVMF/TDVF firmware provided by the cloud platform (or installed via canonical/tdx on bare metal). You cannot control this value from the guest image. Verification policies should match MRTD against the known firmware version.

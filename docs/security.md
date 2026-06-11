@@ -25,13 +25,11 @@ Silicon (TEE hardware: TDX SEAM module / AMD PSP)
   +-- Firmware config measurement (RTMR[0] / VMSA)
   |     Measures vCPU count, memory layout, firmware configuration
   |
-  +-- Secure Boot (UEFI -> shim -> GRUB -> kernel)
-  |     UEFI firmware verifies each stage cryptographically
-  |     shim (Microsoft-signed) -> GRUB (Canonical-signed) -> kernel
-  |
   +-- Boot measurement (RTMR[1-2] / PCR[4-8])
-  |     Measures the EFI boot path, kernel, initrd, command line
+  |     Measures the EFI boot path (shim, GRUB), kernel, initrd, command line
   |     The dm-verity root hash is embedded in the kernel command line
+  |     A tampered stage produces different measurements -> attestation
+  |     fails -> no secrets are released
   |
   +-- dm-verity (root filesystem integrity)
   |     Every 4K block of the erofs rootfs is verified against a Merkle tree
@@ -47,7 +45,9 @@ Silicon (TEE hardware: TDX SEAM module / AMD PSP)
         Writable paths limited to tmpfs and encrypted data partition
 ```
 
-Every layer verifies the next. There are no gaps where unverified code can execute.
+Every layer is measured or verified by the previous one. There are no gaps where unmeasured code can execute undetected.
+
+**Measured boot, not UEFI Secure Boot.** VMs are deployed with Secure Boot disabled: the CVM Guard patched kernel is not Canonical-signed, and the trust model deliberately avoids depending on the cloud provider's or an OS vendor's certificate database. Secure Boot proves a signature from someone on the platform's list; TEE measured boot proves the exact bytes that booted, rooted in the CPU silicon. The enforcement point moves from boot time (refuse to boot) to attestation time (boot, but fail verification and receive no secrets, no RA-TLS identity, and no workload). This is cloud-agnostic and verifiable by any remote party.
 
 ## Threat model
 
@@ -76,7 +76,7 @@ Every layer verifies the next. There are no gaps where unverified code can execu
 | **Disk inspection** | Attacker reads the raw disk image or storage backend | Root filesystem is read-only erofs with dm-verity. Persistent data partition uses LUKS encryption with a key derived from TEE attestation. The disk can be read but not decrypted. |
 | **Rootfs modification** | Attacker modifies a binary on the root filesystem | erofs is read-only. Any modification to a dm-verity protected block causes a hash mismatch, I/O error, and kernel panic. |
 | **Kernel module injection** | Attacker loads a malicious kernel module (rootkit) | `module.sig_enforce=1` rejects unsigned modules. `lockdown=integrity` prevents loading modules via /dev/mem or other bypass paths. |
-| **Boot chain tampering** | Attacker replaces GRUB, kernel, or initrd | Secure Boot verifies the full chain: UEFI -> shim (Microsoft) -> GRUB (Canonical) -> kernel. A modified bootloader fails signature verification and the VM refuses to boot. |
+| **Boot chain tampering** | Attacker replaces GRUB, kernel, or initrd | Every boot stage is measured into TEE registers (RTMR/PCR). A modified bootloader, kernel, or cmdline produces different measurements; remote attestation fails and the VM is never trusted with secrets, an RA-TLS identity, or a workload. |
 | **Network interception** | Attacker intercepts traffic between VMs or to external services | Enclave OS Virtual uses [RA-TLS](https://docs.privasys.org/technology/attestation/attested-connections/) where the server's X.509 certificate contains an embedded TEE attestation quote. Clients verify the quote during the TLS handshake, confirming the server is running inside a genuine TEE with the expected measurements. |
 | **Runtime software installation** | Operator runs `apt install` or drops a binary | The root filesystem is read-only erofs. There is no package manager at runtime. Writable paths are limited to tmpfs (lost on reboot) and the encrypted data partition. |
 | **ACPI/firmware injection** | Hypervisor injects malicious ACPI bytecode to access private memory | CVM Guard kernel patch (BadAML) blocks AML bytecode from accessing pages marked as private/encrypted. See [patches/](../patches/). |
@@ -88,10 +88,10 @@ When a remote verifier checks the TEE attestation report and confirms the measur
 
 1. **The VM is running inside a genuine TEE.** The attestation report is signed by the CPU's hardware key. It cannot be produced by software alone.
 2. **The firmware is unmodified.** The firmware measurement (MRTD / launch digest) matches the expected OVMF/TDVF build.
-3. **The boot chain is intact.** Secure Boot verified every stage. The kernel, initrd, and command line (including dm-verity root hash) are measured into RTMR/PCR registers.
+3. **The boot chain is intact.** Every stage — bootloader, kernel, initrd, and command line (including the dm-verity root hash) — is measured into RTMR/PCR registers and matches the published reference values.
 4. **The root filesystem is exactly the one built from this repository.** The dm-verity root hash is part of the measured kernel command line. Any modification to any file on the rootfs will cause a verification failure.
-5. **No unsigned code runs in kernel space.** Kernel lockdown and module signature enforcement prevent loading arbitrary kernel modules. *Current exception:* the `tdx-gpu` image boots without these two flags because its runtime-loaded patched NVIDIA CC modules are not yet signed with a kernel-trusted key (see [tdx-gpu boot.conf](../images/tdx-gpu/mkosi.conf.d/boot.conf)). Signed bundles now ship with `kernel-v*` releases and the flags will be restored in the next `tdx-gpu` release.
-6. **The CVM Guard kernel patch is active** — on images built with the patched `kernel-v*` kernel (all Enclave OS Virtual production builds). ACPI bytecode cannot access TEE-private memory, closing the firmware-level attack vector documented in BadAML research. The standalone base images published here currently ship Canonical's stock signed kernel (which boots under UEFI Secure Boot); the patched kernel is unsigned and relies on TEE measured boot instead.
+5. **No unsigned code runs in kernel space.** Kernel lockdown and module signature enforcement prevent loading arbitrary kernel modules. On `tdx-gpu`, the runtime-loaded patched NVIDIA CC modules carry a signature from the kernel build's ephemeral key (certificate in the kernel's builtin trusted keyring), so they load under `module.sig_enforce=1` like any in-tree module.
+6. **The CVM Guard kernel patch is active.** All images ship the patched `kernel-v*` kernel. ACPI bytecode cannot access TEE-private memory, closing the firmware-level attack vector documented in BadAML research.
 
 When using [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/), additional guarantees are provided through RA-TLS configuration attestation: the exact set of loaded containers, their digests, and the runtime configuration are all embedded in the server certificate's X.509 extensions and verified during the TLS handshake.
 

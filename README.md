@@ -13,7 +13,7 @@ These images are the base OS layer used by [Enclave OS Virtual](https://docs.pri
 | **sev-snp-base** | `images/sev-snp-base/` | AMD SEV-SNP | Base image for SEV-SNP confidential VMs |
 | **sev-snp-gpu** | `images/sev-snp-gpu/` | AMD SEV-SNP + NVIDIA H100 | Confidential AI inference with GPU CC mode |
 
-All images share the same security architecture: erofs root, dm-verity, Secure Boot, kernel lockdown. One scoped exception: `tdx-gpu` currently boots without `lockdown=integrity` / `module.sig_enforce=1` because the patched NVIDIA CC modules it loads at runtime are not yet signed with a kernel-trusted key — see the note in [images/tdx-gpu/mkosi.conf.d/boot.conf](images/tdx-gpu/mkosi.conf.d/boot.conf). Signed module bundles now ship with `kernel-v*` releases; both flags will be restored in the next `tdx-gpu` release that consumes them.
+All images share the same security architecture: erofs root, dm-verity, TEE measured boot, kernel lockdown (`lockdown=integrity`, `module.sig_enforce=1`). On `tdx-gpu` the runtime-loaded patched NVIDIA CC modules satisfy module signature enforcement because they are signed with the kernel build's ephemeral key, whose certificate lives in the kernel's builtin trusted keyring — kernel and module bundle always come from the same `kernel-v*` release.
 
 Shared overlay files live in `common/mkosi.extra/`:
 
@@ -46,13 +46,14 @@ The images use the same trust chain architecture regardless of the TEE platform 
 ```
 Silicon (TEE hardware root of trust)
   └─ Firmware measurement - measures the VM firmware loaded by the hypervisor
-      └─ Secure Boot - UEFI verifies each bootloader stage cryptographically
-          └─ Boot measurement - measures kernel, initrd, and command line into TEE registers
-              └─ dm-verity - every block of the rootfs verified against a Merkle hash tree
-                  └─ All userland binaries - any modification = I/O error + kernel panic
+      └─ Boot measurement - measures bootloader, kernel, initrd, and command line into TEE registers
+          └─ dm-verity - every block of the rootfs verified against a Merkle hash tree
+              └─ All userland binaries - any modification = I/O error + kernel panic
 ```
 
-Every byte of code that executes on the machine is either measured by TEE hardware or verified by dm-verity. No gaps. For platform-specific measurement details, see [TDX](docs/tdx.md).
+Every byte of code that executes on the machine is either measured by TEE hardware or verified by dm-verity. A tampered bootloader, kernel, or rootfs produces different measurement values, fails remote attestation, and is never released any secrets.
+
+**Why measured boot instead of UEFI Secure Boot?** Secure Boot only proves that *someone on the platform's certificate list* signed the boot chain — and ties you to the cloud provider's and OS vendor's keys. TEE measured boot proves the *exact bytes* that booted, with the root of trust in the CPU silicon rather than a certificate database the hypervisor owner controls. Our images use the CVM Guard patched kernel (not Canonical-signed), so VMs are deployed with Secure Boot disabled and integrity is enforced end-to-end through attestation. This keeps the images fully cloud-agnostic. For platform-specific measurement details, see [TDX](docs/tdx.md).
 
 ## Security documentation
 
@@ -70,11 +71,11 @@ Every byte of code that executes on the machine is either measured by TEE hardwa
 | Component | Details |
 |-----------|---------|
 | Guest OS | Ubuntu 24.04 LTS (Noble Numbat) |
-| Kernel | `linux-image-generic-hwe-24.04` (HWE; auto-tracks latest; TDX + SEV guest support since 6.2). The [CVM Guard patch](patches/) (BadAML mitigation) is built separately (`build-kernel.sh`, published as `kernel-v*` releases) and installed by [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/) image builds; the patched kernel is unsigned, so images that use it boot with measured boot (TEE RTMRs) instead of UEFI Secure Boot. |
+| Kernel | CVM Guard patched Ubuntu HWE (BadAML mitigation, [patches/](patches/)), ABI-pinned, built by `build-kernel.sh` and shipped as `kernel-v*` GitHub releases. All images install the patched kernel; it is unsigned, so boot integrity comes from TEE measured boot rather than UEFI Secure Boot. |
 | Root filesystem | erofs (read-only) |
 | Integrity | dm-verity hash tree |
-| Boot | Signed shim (Microsoft) → signed GRUB (Canonical) → kernel + initrd + dm-verity roothash in cmdline |
-| Secure Boot | Enabled — full chain from UEFI firmware through bootloader to kernel |
+| Boot | shim → GRUB → kernel + initrd + dm-verity roothash in cmdline; every stage measured into TEE registers (RTMR/PCR) |
+| Boot integrity | **TEE measured boot** (attestation-enforced). UEFI Secure Boot is disabled at deploy time: the CVM Guard patched kernel is not Canonical-signed, and the trust model intentionally does not depend on cloud/vendor certificate databases |
 | Partitions | ESP (512 MB) + root erofs (~940 MB) + verity hash (~63 MB) + (GPU images only) 2 GB `data` placeholder |
 | Persistent data | **Not on the boot disk.** Provided by a separate cloud persistent disk attached as `device-name=data` at deploy time, formatted LUKS2+AEAD by [Enclave OS Virtual](https://docs.privasys.org/solutions/enclave-os/presentation/). Survives image upgrades and Spot preemption. |
 | Networking | systemd-networkd with DHCP |
@@ -111,6 +112,13 @@ sudo apt install -y \
 ```bash
 git clone https://github.com/Privasys/cvm-images.git
 cd cvm-images
+
+# Stage the patched CVM Guard kernel for the image you are building
+# (CI does this automatically). For tdx-gpu, also stage the signed
+# NVIDIA CC bundle under mkosi.extra.nvidia-cc/ - see
+# .github/workflows/build-tdx-gpu.yml for the exact layout.
+gh release download kernel-v0.4.0 -R Privasys/cvm-images \
+    --pattern 'linux-*.deb' --dir images/tdx-base/kernel-debs
 
 # Build a cloud-agnostic image (no cloud-specific packages):
 cd images/tdx-base && sudo mkosi build
@@ -305,7 +313,7 @@ The entire pipeline from patch to deployment runs through code we own and CI we 
 ## Design notes
 
 - **Why erofs?** Read-only by design, smaller than ext4, ideal for dm-verity. No accidental writes possible.
-- **Why GRUB instead of UKI?** Cloud TDX firmware (TDVF) enforces Secure Boot, which silently rejects unsigned EFI binaries including systemd-boot and unsigned UKIs. GRUB is the proven boot chain for TDX and SEV-SNP on cloud platforms. The TEE hardware still measures the full boot chain regardless of the bootloader used.
+- **Why GRUB instead of UKI?** Historical: with Secure Boot enabled, cloud TDX firmware silently rejected unsigned EFI binaries including systemd-boot and unsigned UKIs, so GRUB's signed chain was the only workable option. Now that the trust model is measured-boot-only (Secure Boot off), a UKI becomes viable and is attractive for measurement prediction (a single PE binary measured into one RTMR event). Candidate for a future change.
 - **Why `linux-image-generic-hwe-24.04`?** The HWE (Hardware Enablement) kernel tracks the latest LTS-backported kernel on Noble, currently the **6.17 series**. TDX and SEV guest support has been upstream since 6.7.
 - **Why mkosi.extra symlinks instead of mkosi.postinst?** With erofs, the filesystem is already read-only when postinst runs. `systemctl enable` writes symlinks to `/etc`, which fails on a read-only filesystem.
 - **Why `Repositories=universe`?** Required for packages like `clevis` that aren't in Ubuntu's `main` repository.
