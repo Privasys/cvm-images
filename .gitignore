@@ -11,3 +11,7 @@ mkosi.workspace/
 
 # local CI log dumps
 run*.log
+
+# CI-staged build inputs (downloaded from kernel-v* releases)
+images/*/kernel-debs/
+images/*/mkosi.extra.nvidia-cc/

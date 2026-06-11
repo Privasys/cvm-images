@@ -74,6 +74,23 @@ jobs:
             ln -s "$target" "$f"
           fi
 
+      - name: Download patched CVM Guard kernel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          KERNEL_TAG=$(gh release list --repo ${{ github.repository }} \
+            --json tagName -q '.[].tagName' | grep '^kernel-v' | head -1)
+          if [ -z "$KERNEL_TAG" ]; then
+            echo "::error::No kernel-v* release found in ${{ github.repository }}"
+            exit 1
+          fi
+          echo "Using kernel release $KERNEL_TAG"
+          gh release download "$KERNEL_TAG" --repo ${{ github.repository }} \
+            --pattern 'linux-*.deb' --dir images/tdx-base/kernel-debs
+          rm -f images/tdx-base/kernel-debs/linux-headers-*.deb
+          ls -lh images/tdx-base/kernel-debs/
+
       - name: Build image
         run: |
           cd images/tdx-base

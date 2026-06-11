@@ -1,0 +1,13 @@
+# Keep the boot kernel deterministic at the CVM Guard patched ABI staged
+# in kernel-debs/. Various Recommends chains can pull in the floating
+# linux-image-generic-hwe-24.04 meta, which installs a second (stock,
+# unpatched) kernel alongside ours; mkosi's grub then boots the newest
+# kernel, whose module set (gve!) mismatches - no NIC on first boot.
+#
+# When the kernel ABI bumps (new kernel-v* release), update:
+#   1. The explicit linux-* and linux-modules-nvidia-* packages in
+#      mkosi.conf.
+#   2. Nothing here - the blocks below are version-independent.
+Package: linux-image-generic-hwe-24.04 linux-headers-generic-hwe-24.04 linux-generic-hwe-24.04 linux-image-generic linux-modules-nvidia-595-server-open-generic-6.17 linux-modules-nvidia-595-server-open-generic-hwe-24.04 linux-modules-nvidia-595-server-generic-6.17 linux-modules-nvidia-595-server-generic-hwe-24.04
+Pin: release *
+Pin-Priority: -1

@@ -95,6 +95,40 @@ jobs:
             fi
           done
 
+      - name: Download patched CVM Guard kernel + signed NVIDIA CC bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          KERNEL_TAG=$(gh release list --repo ${{ github.repository }} \
+            --json tagName -q '.[].tagName' | grep '^kernel-v' | head -1)
+          if [ -z "$KERNEL_TAG" ]; then
+            echo "::error::No kernel-v* release found in ${{ github.repository }}"
+            exit 1
+          fi
+          echo "Using kernel release $KERNEL_TAG"
+          gh release download "$KERNEL_TAG" --repo ${{ github.repository }} \
+            --pattern 'linux-*.deb' --dir images/tdx-gpu/kernel-debs
+          rm -f images/tdx-gpu/kernel-debs/linux-headers-*.deb
+          ls -lh images/tdx-gpu/kernel-debs/
+
+          # Bake the SIGNED patched CC modules from the same release so the
+          # module vermagic matches the kernel and the signature chains to
+          # its builtin trusted keyring (module.sig_enforce=1).
+          mkdir -p /tmp/nvcc
+          gh release download "$KERNEL_TAG" --repo ${{ github.repository }} \
+            --pattern 'nvidia-cc-bundle-signed-*.tar.gz' --dir /tmp/nvcc
+          tar -xzf /tmp/nvcc/nvidia-cc-bundle-signed-*.tar.gz -C /tmp/nvcc
+          KVER=$(grep '^kernel_version=' /tmp/nvcc/nvidia-cc-bundle/BUILD-INFO | cut -d= -f2)
+          DEST="images/tdx-gpu/mkosi.extra.nvidia-cc/usr/lib/nvidia-cc/$KVER"
+          mkdir -p "$DEST"
+          cp -r /tmp/nvcc/nvidia-cc-bundle/modules "$DEST/"
+          cp -r /tmp/nvcc/nvidia-cc-bundle/firmware "$DEST/"
+          cp /tmp/nvcc/nvidia-cc-bundle/module-signing-cert.x509 "$DEST/"
+          tail -c 100 "$DEST/modules/nvidia.ko" | grep -q "Module signature appended" \
+            || { echo "::error::bundle modules are not signed"; exit 1; }
+          echo "Baked signed CC bundle for kernel $KVER"
+
       - name: Build image
         run: |
           cd images/tdx-gpu
