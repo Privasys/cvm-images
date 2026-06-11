@@ -175,6 +175,19 @@ jobs:
           echo "root_hash=$ROOT_HASH" >> "$GITHUB_OUTPUT"
           { echo "### dm-verity root hash (${{ matrix.variant }})"; echo '```'; echo "$ROOT_HASH"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Predict RTMR measurements
+        id: rtmr
+        run: |
+          # Compute the expected TDX RTMR[1]/RTMR[2] values from the
+          # artifact (GPT, shim/GRUB Authenticode, grub.cfg command
+          # sequence, kernel, cmdline, initrds) so verifiers can pin
+          # measurements without ever booting the image.
+          RAW=$(ls images/tdx-gpu/privasys-tdx-gpu*_*.raw)
+          sudo ./predict-measurements.sh "$RAW" rtmr.json | tee /tmp/rtmr.txt
+          echo "rtmr1=$(awk '/RTMR\[1\]/ {print $3}' /tmp/rtmr.txt)" >> "$GITHUB_OUTPUT"
+          echo "rtmr2=$(awk '/RTMR\[2\]/ {print $3}' /tmp/rtmr.txt)" >> "$GITHUB_OUTPUT"
+          { echo "### Predicted RTMRs (${{ matrix.variant }})"; echo '```'; grep 'RTMR' /tmp/rtmr.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Verify production image has no SSH daemon
         if: matrix.variant != 'gcp-dev'
         run: |
@@ -226,6 +239,7 @@ jobs:
             -C images/tdx-gpu "$RAW"
           sha256sum "$OUT" > "$OUT.sha256"
           echo "${{ steps.verity.outputs.root_hash }}" > "$OUT.roothash"
+          cp rtmr.json "$OUT.measurements.json"
           ls -lh privasys-tdx-gpu${{ matrix.name_suffix }}-*.tar.zst*
           rm images/tdx-gpu/"$RAW"
 
@@ -259,19 +273,25 @@ jobs:
           files: |
             privasys-tdx-gpu-*.tar.zst.sha256
             privasys-tdx-gpu-*.tar.zst.roothash
+            privasys-tdx-gpu-*.tar.zst.measurements.json
           body: |
             ## TDX GPU Image ${{ github.ref_name }}
 
-            ## Measurements
+            ## Measurements (generic variant)
 
             | Measurement | Value |
             |-------------|-------|
-            | **dm-verity root hash (generic)** | `${{ steps.verity.outputs.root_hash }}` |
+            | **dm-verity root hash** | `${{ steps.verity.outputs.root_hash }}` |
+            | **Predicted RTMR[1]** | `${{ steps.rtmr.outputs.rtmr1 }}` |
+            | **Predicted RTMR[2]** | `${{ steps.rtmr.outputs.rtmr2 }}` |
 
             The root hash covers every byte of the read-only rootfs; it is on
-            the kernel command line and measured into the TEE at boot. Each
-            variant's hash is published next to its artifact in GCS
-            (`.tar.zst.roothash`).
+            the kernel command line and measured into the TEE at boot. The
+            RTMR values are computed from the artifact by
+            `predict-measurements.py` (GPT, shim/GRUB Authenticode, grub.cfg
+            command sequence, kernel, cmdline, initrds); the per-event
+            manifest is in the `.measurements.json` asset. Each variant's
+            measurements are published next to its artifact in GCS.
 
             Download from GCS:
             ```bash

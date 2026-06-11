@@ -137,6 +137,19 @@ jobs:
           echo "root_hash=$ROOT_HASH" >> "$GITHUB_OUTPUT"
           { echo "### dm-verity root hash (${{ matrix.variant }})"; echo '```'; echo "$ROOT_HASH"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Predict RTMR measurements
+        id: rtmr
+        run: |
+          # Compute the expected TDX RTMR[1]/RTMR[2] values from the
+          # artifact (GPT, shim/GRUB Authenticode, grub.cfg command
+          # sequence, kernel, cmdline, initrds) so verifiers can pin
+          # measurements without ever booting the image.
+          RAW=$(ls images/tdx-base/privasys-tdx-base*_*.raw)
+          sudo ./predict-measurements.sh "$RAW" rtmr.json | tee /tmp/rtmr.txt
+          echo "rtmr1=$(awk '/RTMR\[1\]/ {print $3}' /tmp/rtmr.txt)" >> "$GITHUB_OUTPUT"
+          echo "rtmr2=$(awk '/RTMR\[2\]/ {print $3}' /tmp/rtmr.txt)" >> "$GITHUB_OUTPUT"
+          { echo "### Predicted RTMRs (${{ matrix.variant }})"; echo '```'; grep 'RTMR' /tmp/rtmr.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Verify production image has no SSH daemon
         if: matrix.variant != 'gcp-dev'
         run: |
@@ -166,6 +179,7 @@ jobs:
           rm disk.raw
           sha256sum "$OUT" > "$OUT.sha256"
           echo "${{ steps.verity.outputs.root_hash }}" > "$OUT.roothash"
+          cp rtmr.json "$OUT.measurements.json"
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/tdx-base-v')
@@ -175,5 +189,21 @@ jobs:
             privasys-tdx-base${{ matrix.name_suffix }}-*.tar.gz
             privasys-tdx-base${{ matrix.name_suffix }}-*.tar.gz.sha256
             privasys-tdx-base${{ matrix.name_suffix }}-*.tar.gz.roothash
+            privasys-tdx-base${{ matrix.name_suffix }}-*.tar.gz.measurements.json
+          body: |
+            ## Measurements (${{ matrix.variant }})
+
+            | Measurement | Value |
+            |-------------|-------|
+            | **dm-verity root hash** | `${{ steps.verity.outputs.root_hash }}` |
+            | **Predicted RTMR[1]** | `${{ steps.rtmr.outputs.rtmr1 }}` |
+            | **Predicted RTMR[2]** | `${{ steps.rtmr.outputs.rtmr2 }}` |
+
+            RTMR values computed from the artifact by `predict-measurements.py`
+            (GPT, shim/GRUB Authenticode, grub.cfg command sequence, kernel,
+            cmdline, initrds) — the full per-event manifest is in the
+            `.measurements.json` asset. Verify against the TDX quote in any
+            RA-TLS handshake.
+          append_body: true
           generate_release_notes: true
           make_latest: false

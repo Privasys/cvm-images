@@ -87,6 +87,31 @@ Every byte of code that executes on the machine is either measured by TEE hardwa
 
 Download the latest `.tar.gz` from [Releases](https://github.com/Privasys/cvm-images/releases). Releases are tagged per image: `tdx-base-v*`, `tdx-gpu-v*`, `sev-snp-base-v*`, `sev-snp-gpu-v*`. Each release contains a raw disk image (`disk.raw` inside the archive) that can be imported into any capable platform.
 
+### Published measurements
+
+Every release publishes, next to each artifact:
+
+| File | Contents |
+|------|----------|
+| `<artifact>.sha256` | SHA-256 of the artifact (download integrity) |
+| `<artifact>.roothash` | dm-verity root hash — the code identity of the rootfs, recomputed from the artifact in CI |
+| `<artifact>.measurements.json` | **Predicted TDX RTMR[1] and RTMR[2]** plus the per-event digest manifest, computed from the artifact by [`predict-measurements.py`](predict-measurements.py) (TDX images only) |
+
+The RTMR predictor derives every measured boot event from the image
+itself — GPT, shim/GRUB PE Authenticode digests, the grub.cfg command
+sequence, kernel, command line (including the verity roothash), and
+initrds — and replays the SHA-384 extend chain. The values match what
+TDX hardware reports at boot; no "golden boot" is required to obtain
+reference measurements. (MRTD measures the platform's TD firmware and
+is pinned per platform; SEV-SNP launch-measurement prediction is
+tracked separately.)
+
+Builds are made deterministic in inputs by pinning the apt universe to
+a dated [snapshot.ubuntu.com](https://snapshot.ubuntu.com) timestamp in
+each image's `mkosi.conf` (`Mirror=`), the kernel to an exact ABI from
+our own `kernel-v*` releases, and mkosi plus all CI actions to commit
+SHAs.
+
 ## Building from source
 
 ### Prerequisites
