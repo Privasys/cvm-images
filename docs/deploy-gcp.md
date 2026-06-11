@@ -1,6 +1,6 @@
 # Deploying to Google Cloud Platform
 
-Import and launch the tdx-image-base image on GCP Confidential VMs with Intel TDX.
+Import and launch the cvm-images tdx-base image on GCP Confidential VMs with Intel TDX.
 
 ## Prerequisites
 
@@ -30,7 +30,7 @@ gcloud compute images create privasys-tdx-base-0-1-0 \
     --source-uri=gs://YOUR_BUCKET/privasys-tdx-base-0.1.0.tar.gz \
     --guest-os-features=TDX_CAPABLE,UEFI_COMPATIBLE,GVNIC,VIRTIO_SCSI_MULTIQUEUE \
     --family=privasys-tdx \
-    --description="Privasys TDX base image v0.1.0 - Ubuntu 24.04, erofs root, dm-verity, unsigned UKI"
+    --description="Privasys TDX base image v0.1.0 - Ubuntu 24.04, erofs root, dm-verity, measured boot (GRUB)"
 ```
 
 `--family=privasys-tdx` lets you always reference the latest image without hardcoding version numbers.

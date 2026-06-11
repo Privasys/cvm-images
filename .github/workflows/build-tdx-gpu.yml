@@ -141,6 +141,40 @@ jobs:
           echo "---"
           ls -lh "$RAW"
 
+      - name: Extract dm-verity root hash
+        id: verity
+        run: |
+          # The root hash is the code-identity measurement of the rootfs:
+          # it is baked into the kernel command line and measured into the
+          # TEE at boot. Recompute it from the artifact (same salt and
+          # block sizes as the superblock) and publish it with the image.
+          RAW=$(ls images/tdx-gpu/privasys-tdx-gpu*_*.raw)
+          LOOPDEV=$(sudo losetup --find --show --partscan "$RAW")
+          sudo partprobe "$LOOPDEV" 2>/dev/null || true
+          sleep 1
+          VERITY_PART=""; DATA_PART=""
+          for part in "${LOOPDEV}p"*; do
+            TYPE=$(sudo blkid -o value -s TYPE "$part" 2>/dev/null || true)
+            case "$TYPE" in
+              DM_verity_hash) VERITY_PART="$part" ;;
+              erofs)          DATA_PART="$part" ;;
+            esac
+          done
+          [ -n "$VERITY_PART" ] && [ -n "$DATA_PART" ] || { echo "::error::verity or data partition not found"; sudo losetup -d "$LOOPDEV"; exit 1; }
+          DUMP=$(sudo veritysetup dump "$VERITY_PART")
+          SALT=$(echo "$DUMP" | grep 'Salt:' | awk '{print $NF}')
+          DATA_BS=$(echo "$DUMP" | grep 'Data block size:' | awk '{print $NF}')
+          HASH_BS=$(echo "$DUMP" | grep 'Hash block size:' | awk '{print $NF}')
+          truncate -s 256M /tmp/verity-recompute.img
+          ROOT_HASH=$(sudo veritysetup format "$DATA_PART" /tmp/verity-recompute.img \
+            --data-block-size="$DATA_BS" --hash-block-size="$HASH_BS" \
+            --salt="$SALT" --format=1 2>&1 | grep 'Root hash:' | awk '{print $NF}')
+          rm -f /tmp/verity-recompute.img
+          sudo losetup -d "$LOOPDEV"
+          [ -n "$ROOT_HASH" ] || { echo "::error::failed to compute dm-verity root hash"; exit 1; }
+          echo "root_hash=$ROOT_HASH" >> "$GITHUB_OUTPUT"
+          { echo "### dm-verity root hash (${{ matrix.variant }})"; echo '```'; echo "$ROOT_HASH"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Verify production image has no SSH daemon
         if: matrix.variant != 'gcp-dev'
         run: |
@@ -170,6 +204,7 @@ jobs:
             --transform "s|$RAW|disk.raw|" \
             -C images/tdx-gpu "$RAW"
           sha256sum "$OUT" > "$OUT.sha256"
+          echo "${{ steps.verity.outputs.root_hash }}" > "$OUT.roothash"
           ls -lh privasys-tdx-gpu${{ matrix.name_suffix }}-*.tar.zst*
           rm images/tdx-gpu/"$RAW"
 
@@ -200,8 +235,22 @@ jobs:
         if: always() && startsWith(github.ref, 'refs/tags/tdx-gpu-') && matrix.variant == 'generic'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          files: |
+            privasys-tdx-gpu-*.tar.zst.sha256
+            privasys-tdx-gpu-*.tar.zst.roothash
           body: |
             ## TDX GPU Image ${{ github.ref_name }}
+
+            ## Measurements
+
+            | Measurement | Value |
+            |-------------|-------|
+            | **dm-verity root hash (generic)** | `${{ steps.verity.outputs.root_hash }}` |
+
+            The root hash covers every byte of the read-only rootfs; it is on
+            the kernel command line and measured into the TEE at boot. Each
+            variant's hash is published next to its artifact in GCS
+            (`.tar.zst.roothash`).
 
             Download from GCS:
             ```bash
