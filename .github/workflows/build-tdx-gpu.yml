@@ -195,6 +195,27 @@ jobs:
           sudo rm -f /tmp/root.img
           echo "OK: no sshd in production image"
 
+      - name: Verify signed NVIDIA CC bundle is baked
+        run: |
+          # The signed module bundle must end up inside the measured rootfs
+          # at /usr/lib/nvidia-cc/<kver>/ — a silently skipped ExtraTrees
+          # leaves the image bootable but running unpatched modules.
+          RAW=$(ls images/tdx-gpu/privasys-tdx-gpu*_*.raw)
+          KVER=$(ls images/tdx-gpu/mkosi.extra.nvidia-cc/usr/lib/nvidia-cc/ | head -1)
+          ROOT_GUID=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709
+          read -r START SIZE <<< "$(sudo sfdisk --json "$RAW" \
+            | jq -r --arg t "$ROOT_GUID" \
+              '.partitiontable.partitions[] | select(.type==($t|ascii_upcase)) | "\(.start) \(.size)"' \
+            | head -1)"
+          sudo dd if="$RAW" of=/tmp/root.img bs=512 skip="$START" count="$SIZE" status=none
+          if ! dump.erofs --ls --path="/usr/lib/nvidia-cc/$KVER/modules" /tmp/root.img | grep -qw nvidia.ko; then
+            echo "::error::signed NVIDIA CC bundle missing from image (/usr/lib/nvidia-cc/$KVER)"
+            sudo rm -f /tmp/root.img
+            exit 1
+          fi
+          sudo rm -f /tmp/root.img
+          echo "OK: signed NVIDIA CC bundle present at /usr/lib/nvidia-cc/$KVER"
+
       - name: Package image
         if: startsWith(github.ref, 'refs/tags/tdx-gpu-')
         run: |
