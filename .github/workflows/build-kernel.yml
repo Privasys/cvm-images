@@ -80,7 +80,8 @@ jobs:
           # Ship the PUBLIC certificate in the bundle for transparency /
           # offline verification. The private key never leaves this job.
           sudo cp "$S/signing_key.x509" nvidia-cc-bundle/module-signing-cert.x509
-          echo "signed=true" >> nvidia-cc-bundle/BUILD-INFO
+          # BUILD-INFO is root-owned (the bundle is produced under sudo).
+          echo "signed=true" | sudo tee -a nvidia-cc-bundle/BUILD-INFO >/dev/null
 
       - name: Destroy ephemeral signing key
         if: always()
