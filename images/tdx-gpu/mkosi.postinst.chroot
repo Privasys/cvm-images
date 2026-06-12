@@ -13,6 +13,17 @@
 
 set -euo pipefail
 
-if [ -f /usr/sbin/runc ] && [ ! -e /usr/sbin/runc.real ]; then
-    cp -a /usr/sbin/runc /usr/sbin/runc.real
+# The runc package's binary path moved between snapshots
+# (/usr/sbin/runc vs /usr/bin/runc); resolve whichever exists so the
+# frozen copy is never silently skipped (a missing runc.real breaks
+# every GPU container at task-create time).
+if [ ! -e /usr/sbin/runc.real ]; then
+    if [ -f /usr/sbin/runc ]; then
+        cp -a /usr/sbin/runc /usr/sbin/runc.real
+    elif [ -f /usr/bin/runc ]; then
+        cp -a /usr/bin/runc /usr/sbin/runc.real
+    else
+        echo "FATAL: no runc binary found to freeze as runc.real" >&2
+        exit 1
+    fi
 fi
