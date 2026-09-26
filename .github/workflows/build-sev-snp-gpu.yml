@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
     tags: ['sev-snp-gpu-v*']
+    # A push to main rebuilds only when the image changes (a push that only
+    # touches docs or other workflows must not start GPU builds). Path filters
+    # are not evaluated for tag pushes, so a release tag always builds.
+    paths:
+      - 'images/sev-snp-gpu/**'
+      - 'common/**'
+      - '.github/workflows/build-sev-snp-gpu.yml'
   pull_request:
     branches: [main]
     paths:
