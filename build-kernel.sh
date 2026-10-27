@@ -2,12 +2,12 @@
 # Build a patched Ubuntu HWE kernel with the CVM guard (BadAML mitigation).
 #
 # This script:
-#   1. Downloads the Ubuntu HWE kernel source (matching linux-image-generic-hwe-24.04)
+#   1. Downloads the Ubuntu HWE kernel source for the pinned ABI (KERNEL_ABI)
 #   2. Applies the CVM guard patch (blocks AML access to CVM private memory)
 #   3. Builds .deb kernel packages
 #   4. Outputs them to the specified directory
 #
-# The resulting .debs are drop-in replacements for linux-image-generic-hwe-24.04
+# The resulting .debs are drop-in replacements for Ubuntu's kernel of that ABI
 # with a single change: the ACPI memory space handler denies AML bytecode from
 # reading or writing pages marked as encrypted/private on TDX and SEV-SNP VMs.
 #
@@ -58,24 +58,18 @@ apt-get install -y --no-install-recommends \
     python3 python3-dev \
     llvm clang lld 2>/dev/null || true
 
-# ── Step 1: Identify the HWE kernel version ──
+# ── Step 1: The kernel ABI ──
+# Pinned on purpose: a kernel release must be a deliberate choice, not
+# whatever linux-image-generic-hwe-24.04 points at on the day CI runs. Pick
+# an ABI that is published in noble-security/-updates AND has a matching
+# linux-modules-nvidia-595-server-open-<abi>-generic built against the
+# NVIDIA version in build-nvidia-modules.sh (the GPU image installs both).
 echo ""
 echo "=== Resolving kernel version ==="
-KERNEL_META="linux-image-generic-hwe-24.04"
-KERNEL_PKG=$(apt-cache depends "$KERNEL_META" 2>/dev/null \
-    | grep -oP 'linux-image-unsigned-\d[\d.]+\d-\d+-generic' | head -1 || true)
-if [ -z "$KERNEL_PKG" ]; then
-    KERNEL_PKG=$(apt-cache depends "$KERNEL_META" 2>/dev/null \
-        | grep -oP 'linux-image-\d[\d.]+\d-\d+-generic' | head -1 || true)
-fi
-if [ -z "$KERNEL_PKG" ]; then
-    echo "ERROR: cannot resolve $KERNEL_META"
-    exit 1
-fi
-
-KVER=$(echo "$KERNEL_PKG" | grep -oP '\d+\.\d+\.\d+-\d+')
+KERNEL_ABI="${KERNEL_ABI:-7.0.0-38}"
+KVER="$KERNEL_ABI"
 KMAJMIN=$(echo "$KVER" | grep -oP '^\d+\.\d+')
-echo "Target: $KERNEL_PKG  (version $KVER, series $KMAJMIN)"
+echo "Target: linux-image-unsigned-${KVER}-generic  (version $KVER, series $KMAJMIN)"
 
 # ── Step 2: Fetch source ──
 echo ""
@@ -86,15 +80,22 @@ cd "$BUILD_DIR"
 SRC_PKG="linux-hwe-${KMAJMIN}"
 
 # Ensure deb-src repos are available.
-if ! apt-get source --download-only "$SRC_PKG" 2>/dev/null; then
-    echo "Enabling deb-src repositories..."
-    sed -i 's/^# deb-src/deb-src/' /etc/apt/sources.list.d/*.list 2>/dev/null || true
-    sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
-    apt-get update -qq
-fi
+sed -i 's/^# deb-src/deb-src/' /etc/apt/sources.list.d/*.list 2>/dev/null || true
+sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+apt-get update -qq
 
-apt-get source "$SRC_PKG"
-apt-get build-dep -y "$SRC_PKG"
+# The source version for exactly this ABI (e.g. 7.0.0-38.38~24.04.4).
+SRC_VER=$(apt-cache showsrc "$SRC_PKG" \
+    | awk -v k="$KVER." '$1 == "Version:" && index($2, k) == 1 { print $2 }' \
+    | sort -V | tail -1)
+if [ -z "$SRC_VER" ]; then
+    echo "ERROR: no $SRC_PKG source for ABI $KVER in the enabled archives"
+    exit 1
+fi
+echo "Source: $SRC_PKG=$SRC_VER"
+
+apt-get source "$SRC_PKG=$SRC_VER"
+apt-get build-dep -y "$SRC_PKG=$SRC_VER"
 
 SRC_DIR=$(find "$BUILD_DIR" -maxdepth 1 -type d -name "linux-*" ! -name "*.orig" | head -1)
 if [ -z "$SRC_DIR" ]; then
@@ -159,16 +160,14 @@ echo ""
 echo "=== Building kernel .deb packages ==="
 KBUILD_LOG="$BUILD_DIR/build.log"
 
-# Disable DKMS modules that are useless on a server CVM and that drag in
-# external launchpad downloads which periodically time out (see cvm-images
-# CI run 25291202275 — v4l2loopback fetch from launchpad.net stalled out).
-# v4l2loopback = virtual webcam, iwlwifi = Intel laptop wifi, zfs = ZFS DKMS.
-for mk in $(find . -maxdepth 4 -path "*/debian*/rules.d/*.mk" 2>/dev/null); do
-    sed -i \
-        -e 's/^do_dkms_v4l2loopback[[:space:]]*=.*/do_dkms_v4l2loopback = false/' \
-        -e 's/^do_dkms_iwlwifi[[:space:]]*=.*/do_dkms_iwlwifi = false/' \
-        -e 's/^do_dkms_zfs[[:space:]]*=.*/do_dkms_zfs = false/' \
-        "$mk" && echo "Disabled unused DKMS modules in $mk"
+# Build no DKMS modules at all. None is used on a server CVM (zfs,
+# v4l2loopback, iwlwifi, evdi, ipu6/ipu7, usbio, vision, ...), and each drags
+# in an external launchpad download that periodically times out (see
+# cvm-images CI run 25291202275, a v4l2loopback fetch that stalled). The
+# packaging builds its DKMS list from <debian>/dkms-versions, so an empty
+# file builds none; that holds whatever modules a kernel series adds.
+for dv in $(find . -maxdepth 2 -path "./debian*/dkms-versions" 2>/dev/null); do
+    : > "$dv" && echo "Emptied $dv (no DKMS modules)"
 done
 
 # Skip debug packages and ABI checks to save ~50 GB disk.
