@@ -108,7 +108,8 @@ tracked separately.)
 
 Builds are made deterministic in inputs by pinning the apt universe to
 a dated [snapshot.ubuntu.com](https://snapshot.ubuntu.com) timestamp in
-each image's `mkosi.conf` (`Mirror=`), the kernel to an exact ABI from
+each image's `mkosi.conf` (`Snapshot=`, which covers every pocket,
+security included), the kernel to an exact ABI from
 our own `kernel-v*` releases, and mkosi plus all CI actions to commit
 SHAs.
 
@@ -142,7 +143,7 @@ cd cvm-images
 # (CI does this automatically). For tdx-gpu, also stage the signed
 # NVIDIA CC bundle under mkosi.extra.nvidia-cc/ - see
 # .github/workflows/build-tdx-gpu.yml for the exact layout.
-gh release download kernel-v0.4.0 -R Privasys/cvm-images \
+gh release download kernel-v0.5.2 -R Privasys/cvm-images \
     --pattern 'linux-*.deb' --dir images/tdx-base/kernel-debs
 
 # Build a cloud-agnostic image (no cloud-specific packages):
@@ -339,7 +340,7 @@ The entire pipeline from patch to deployment runs through code we own and CI we 
 
 - **Why erofs?** Read-only by design, smaller than ext4, ideal for dm-verity. No accidental writes possible.
 - **Why GRUB instead of UKI?** Historical: with Secure Boot enabled, cloud TDX firmware silently rejected unsigned EFI binaries including systemd-boot and unsigned UKIs, so GRUB's signed chain was the only workable option. Now that the trust model is measured-boot-only (Secure Boot off), a UKI becomes viable and is attractive for measurement prediction (a single PE binary measured into one RTMR event). Candidate for a future change.
-- **Why `linux-image-generic-hwe-24.04`?** The HWE (Hardware Enablement) kernel tracks the latest LTS-backported kernel on Noble, currently the **6.17 series**. TDX and SEV guest support has been upstream since 6.7.
+- **Why the HWE kernel?** The HWE (Hardware Enablement) kernel tracks the latest LTS-backported kernel on Noble, currently the **7.0 series**. TDX and SEV guest support has been upstream since 6.7. We build it from Canonical's source at a pinned ABI (`build-kernel.sh`), adding only the CVM Guard patch, rather than installing the floating `linux-image-generic-hwe-24.04` meta-package.
 - **Why mkosi.extra symlinks instead of mkosi.postinst?** With erofs, the filesystem is already read-only when postinst runs. `systemctl enable` writes symlinks to `/etc`, which fails on a read-only filesystem.
 - **Why `Repositories=universe`?** Required for packages like `clevis` that aren't in Ubuntu's `main` repository.
 - **Why `CopyFiles=/:/` in the root partition config?** erofs requires explicit file population - without this directive, the root partition is empty.
