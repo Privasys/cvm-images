@@ -18,7 +18,7 @@
 #
 # Usage:
 #   ./build-nvidia-modules.sh [--output-dir /path/to/output]
-#   ./build-nvidia-modules.sh --kernel-version 7.0.0-42-generic
+#   ./build-nvidia-modules.sh --kernel-version 7.0.0-43-generic
 
 set -euo pipefail
 
@@ -26,7 +26,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PATCH_DIR="$SCRIPT_DIR/patches/nvidia"
 OUTPUT_DIR="${1:-$SCRIPT_DIR/nvidia-cc-bundle}"
 # Must match the userspace driver version the image installs. Ubuntu's
-# prebuilt linux-modules-nvidia-595-server-open-7.0.0-42-generic requires
+# prebuilt linux-modules-nvidia-595-server-open-7.0.0-43-generic requires
 # exactly the 595.91.07 userspace (the only 595 userspace left in
 # noble-updates/-security); nvidia-smi and libcuda refuse to talk to a kernel
 # module of a different version. (595.71.05 paired with ABI 6.17.0-35,

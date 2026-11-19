@@ -4,14 +4,12 @@
 # This script:
 #   1. Downloads the Ubuntu HWE kernel source for the pinned ABI (KERNEL_ABI)
 #   2. Applies the CVM guard patch (blocks AML access to CVM private memory)
-#   3. Applies the security fixes this ABI does not carry yet
-#   4. Builds .deb kernel packages
-#   5. Outputs them to the specified directory
+#   3. Builds .deb kernel packages
+#   4. Outputs them to the specified directory
 #
 # The resulting .debs are drop-in replacements for Ubuntu's kernel of that ABI
-# with two changes: the ACPI memory space handler denies AML bytecode from
-# reading or writing pages marked as encrypted/private on TDX and SEV-SNP VMs,
-# and the CVE-2026-98432 fix (IPv4 TCP use-after-free) is applied.
+# with a single change: the ACPI memory space handler denies AML bytecode from
+# reading or writing pages marked as encrypted/private on TDX and SEV-SNP VMs.
 #
 # Requirements:
 #   - Ubuntu 24.04 (Noble) build environment
@@ -68,7 +66,7 @@ apt-get install -y --no-install-recommends \
 # NVIDIA version in build-nvidia-modules.sh (the GPU image installs both).
 echo ""
 echo "=== Resolving kernel version ==="
-KERNEL_ABI="${KERNEL_ABI:-7.0.0-42}"
+KERNEL_ABI="${KERNEL_ABI:-7.0.0-43}"
 KVER="$KERNEL_ABI"
 KMAJMIN=$(echo "$KVER" | grep -oP '^\d+\.\d+')
 echo "Target: linux-image-unsigned-${KVER}-generic  (version $KVER, series $KMAJMIN)"
@@ -87,12 +85,12 @@ sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/*.sources 2>
 # Ubuntu drops a superseded kernel's source from its index and pool, so the
 # live archive alone stops serving a pinned ABI once the next one ships. Bump
 # this with KERNEL_ABI, to a snapshot that publishes that ABI.
-KERNEL_SRC_SNAPSHOT="${KERNEL_SRC_SNAPSHOT:-20261104T000000Z}"
+KERNEL_SRC_SNAPSHOT="${KERNEL_SRC_SNAPSHOT:-20261118T000000Z}"
 echo "deb-src https://snapshot.ubuntu.com/ubuntu/$KERNEL_SRC_SNAPSHOT noble-updates main" \
     > /etc/apt/sources.list.d/kernel-src-snapshot.list
 apt-get update -qq
 
-# The source version for exactly this ABI (e.g. 7.0.0-42.42~24.04.1).
+# The source version for exactly this ABI (e.g. 7.0.0-43.43~24.04.1).
 SRC_VER=$(apt-cache showsrc "$SRC_PKG" \
     | awk -v k="$KVER." '$1 == "Version:" && index($2, k) == 1 { print $2 }' \
     | sort -V | tail -1)
@@ -153,23 +151,6 @@ fi
 grep -q "cvm_guard" "$EXREGION" || { echo "ERROR: verification failed"; exit 1; }
 [ -f "$GUARD_H" ] || { echo "ERROR: cvm_guard.h missing"; exit 1; }
 echo "Patch verified"
-
-# ── Step 3.5: Apply the CVE-2026-98432 fix ──
-# Upstream e3f33b0a1d89, for ABIs older than Ubuntu's 7.0.0-43, which carries
-# it. No fallback: a patch that does not apply cleanly fails the build, which
-# is also how this step reports an ABI that no longer needs it.
-echo ""
-echo "=== Applying CVE-2026-98432 fix ==="
-PATCH="$PATCH_DIR/0002-ipv4-free-inet_opt-and-ireq_opt-after-an-RCU-grace-period.patch"
-[ -f "$PATCH" ] || { echo "ERROR: $PATCH not found"; exit 1; }
-patch -p1 --forward --fuzz=0 --no-backup-if-mismatch < "$PATCH"
-
-# Verify the tree, not the patch's exit status.
-grep -qF 'kfree_rcu(rcu_dereference_protected(inet->inet_opt, 1), rcu);' net/ipv4/af_inet.c \
-    || { echo "ERROR: inet_sock_destruct() does not free inet_opt with kfree_rcu"; exit 1; }
-grep -qF 'kfree_rcu(rcu_dereference_protected(inet_rsk(req)->ireq_opt, 1), rcu);' net/ipv4/tcp_ipv4.c \
-    || { echo "ERROR: tcp_v4_reqsk_destructor() does not free ireq_opt with kfree_rcu"; exit 1; }
-echo "Fix verified"
 
 # ── Step 4: Mark as Privasys build ──
 echo ""
